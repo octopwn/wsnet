@@ -1,6 +1,5 @@
 import websockets
 import asyncio
-import os
 
 from wsnet import logger
 from wsnet.agent.agent import WSNETAgent
@@ -28,3 +27,10 @@ class WSNETWSServer:
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
 		await self.wsserver.wait_closed()
 
+
+async def amain():
+	server = WSNETWSServer()
+	await server.run()
+
+if __name__ == '__main__':
+	asyncio.run(amain())

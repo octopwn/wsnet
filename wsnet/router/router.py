@@ -74,18 +74,33 @@ class WSNETRouter:
 		print('Agent handler exiting')
 
 class OPServer:
-	def __init__(self, in_q, out_q, signal_q_in, signal_q_out, listen_ip = '0.0.0.0', listen_port = 8900, ssl_ctx = None):
+	def __init__(self, in_q, out_q, signal_q_in, signal_q_out, listen_ip = '0.0.0.0', listen_port = 8900, ssl_ctx = None, reverse_operators = []):
 		self.listen_ip = listen_ip
 		self.listen_port = listen_port
 		self.ssl_ctx = ssl_ctx
 		self.wsserver = None
 		self.agents = {}
 		self.operators = {}
+		self.reverse_operators = reverse_operators #list of WS URLS where the router connects to for external operators
 		self.in_q = in_q
 		self.out_q = out_q
 		self.data_lookop = {}
 		self.signal_q_in = signal_q_in
 		self.signal_q_out = signal_q_out
+
+	async def __handle_reverse_operator(self, url):
+		while True:
+			try:
+				print('Connecting to remote operator')
+				async with websockets.connect(url) as ws:
+					await self.handle_client(ws, 'external')
+					await asyncio.sleep(1000)
+			except Exception as e:
+				traceback.print_exc()
+			finally:
+				await asyncio.sleep(5)
+				print('Reconnecting')
+
 				
 	async def __handle_signal_in_queue(self):
 		while True:
@@ -191,6 +206,7 @@ class OPServer:
 				await self.out_q.put((agentid, agentdata))
 		
 		except Exception as e:
+			traceback.print_exc()
 			print('OPERATOR DISCONNECTED!')
 		finally:
 			if opid in self.operators:
@@ -199,6 +215,9 @@ class OPServer:
 	async def run(self):
 		asyncio.create_task(self.__handle_signal_in_queue())
 		asyncio.create_task(self.__handle_in_queue())
+		for url in self.reverse_operators:
+			asyncio.create_task(self.__handle_reverse_operator(url))
+		
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
 		await self.wsserver.wait_closed()
 
@@ -214,7 +233,7 @@ async def amain(args):
 		in_q = asyncio.Queue()
 		out_q = asyncio.Queue()
 		clientsrv = WSNETRouter(in_q, out_q, signal_q_in, signal_q_out, listen_ip = args.agent_ip, listen_port = args.agent_port)
-		opsrv = OPServer(in_q, out_q, signal_q_in, signal_q_out, listen_ip = args.server_ip, listen_port = args.server_port)
+		opsrv = OPServer(in_q, out_q, signal_q_in, signal_q_out, listen_ip = args.server_ip, listen_port = args.server_port, reverse_operators=args.rop)
 		clientsrv_task = asyncio.create_task(clientsrv.run())
 		await opsrv.run()
 		
@@ -230,8 +249,10 @@ def main():
 	parser.add_argument('--server-port', default = 8900, type=int, help = 'server listen port')
 	parser.add_argument('--agent-ip', default='0.0.0.0', help = 'server listen ip')
 	parser.add_argument('--agent-port', default = 8901, type=int, help = 'server listen port')
+	parser.add_argument('--rop', action='append', help = 'Connect to operator at given URL')
 
 	args = parser.parse_args()
+	print(args.rop)
 
 	asyncio.run(amain(args))
 
