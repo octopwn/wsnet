@@ -1,3 +1,4 @@
+import traceback
 import websockets
 import asyncio
 
@@ -29,8 +30,18 @@ class WSNETWSServer:
 
 
 async def amain():
-	server = WSNETWSServer()
-	await server.run()
+	try:
+		import argparse
+		parser = argparse.ArgumentParser(description='WSNET server PoC')
+		parser.add_argument('--ip', default='127.0.0.1', help='Listen IP')
+		parser.add_argument('--port', type=int, default=8700, help='Listen port')
 
+		args = parser.parse_args()
+		server = WSNETWSServer(listen_ip=args.ip, listen_port=args.port)
+		await server.run()
+
+
+	except:
+		traceback.print_exc()
 if __name__ == '__main__':
 	asyncio.run(amain())
