@@ -107,7 +107,6 @@ class WSNETAgent:
 			if cmd.protocol == 'TCP':
 				reader, writer = await asyncio.open_connection(cmd.ip, int(cmd.port))
 
-
 				in_q = asyncio.Queue()
 				self.__process_queues[cmd.token] = in_q
 				out_task = asyncio.create_task(self.__socket_data_in_handle(cmd.token, in_q, reader, writer))
