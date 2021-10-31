@@ -29,19 +29,23 @@ class WSNETWSServer:
 		await self.wsserver.wait_closed()
 
 
-async def amain():
+async def amain(args):
 	try:
-		import argparse
-		parser = argparse.ArgumentParser(description='WSNET server PoC')
-		parser.add_argument('--ip', default='127.0.0.1', help='Listen IP')
-		parser.add_argument('--port', type=int, default=8700, help='Listen port')
-
-		args = parser.parse_args()
 		server = WSNETWSServer(listen_ip=args.ip, listen_port=args.port)
 		await server.run()
 
-
 	except:
 		traceback.print_exc()
+
+def main():
+	import argparse
+	parser = argparse.ArgumentParser(description='WSNET proxy server')
+	parser.add_argument('--ip', default='127.0.0.1', help='Listen IP')
+	parser.add_argument('--port', type=int, default=8700, help='Listen port')
+
+	args = parser.parse_args()
+
+	asyncio.run(amain(args))
+
 if __name__ == '__main__':
-	asyncio.run(amain())
+	main()

@@ -102,6 +102,7 @@ class WSNETAgent:
 			print(e)
 
 	async def socket_connect(self, cmd):
+		out_task = None
 		try:
 			await self.log_start(cmd)
 			if cmd.protocol == 'TCP':
@@ -129,7 +130,8 @@ class WSNETAgent:
 			logger.exception('socket_connect')
 			await self.send_err(cmd, 'Socket connect failed', e)
 		finally:
-			out_task.cancel()
+			if out_task is not None:
+				out_task.cancel()
 
 	async def __socket_data_in_handle(self, token, in_q, reader, writer):
 		try:

@@ -2,15 +2,19 @@
 import asyncio
 import os
 import traceback
-import builtins
 from wsnet.protocol import *
 
-# this is a pyodide module to access javascript objects
-#from js import wsnet
-#import js
+try:
+	import js
+	from pyodide import to_js
+except:
+	pass
 
 class WSNetworkTCP:
 	def __init__(self, ip, port, in_q, out_q):
+		self.connected_evt = None
+		self.ws_url = None
+		self.ws = None
 		self.ip = ip
 		self.port = port
 		self.in_q = in_q
@@ -19,17 +23,28 @@ class WSNetworkTCP:
 
 		self.in_task = None
 		self.out_task = None
+		self.__internal_in_q = None
 
 	async def terminate(self):
 		if self.in_task is not None:
 			self.in_task.cancel()
 		if self.out_task is not None:
 			self.out_task.cancel()
+	
+	def data_in(self, data):
+		try:
+			self.__internal_in_q.put_nowait((data, None))
+		except Exception as e:
+			js.console.log(str(e))
 
 	async def __handle_in(self):
 		while True:
 			try:
-				cmd, err = await builtins.global_wsnet_dispatch_table[self.token].get()			
+				datapromise, err = await self.__internal_in_q.get()
+				data_memview = await datapromise
+				data = data_memview.to_py()
+				cmd = CMD.from_bytes(bytearray(data))
+
 				#print('__handle_in %s' % cmd)
 				if err is not None:
 					raise err
@@ -44,6 +59,7 @@ class WSNetworkTCP:
 			except asyncio.CancelledError:
 				return
 			except Exception as e:
+				traceback.print_exc()
 				await self.in_q.put((None, e))
 				return
 
@@ -56,23 +72,30 @@ class WSNetworkTCP:
 				if data is None or data == b'':
 					return
 				cmd = WSNSocketData(self.token, data)
-				builtins.global_current_websocket[-1].send(cmd.to_bytes())
+				self.ws.send(to_js(cmd.to_bytes()))
 		except Exception as e:
 			traceback.print_exc()
 			return
 		finally:
 			try:
 				cmd = WSNOK(self.token)
-				builtins.global_current_websocket[-1].send(cmd.to_bytes())
+				self.ws.send(to_js(cmd.to_bytes()))
 			except:
 				pass
-
+	
 	async def connect(self):
 		try:
-			builtins.global_wsnet_dispatch_table[self.token] = asyncio.Queue()
+			await asyncio.wait_for(self.connected_evt.wait(), 10)
 			cmd = WSNConnect(self.token, 'TCP', self.ip, self.port)
-			builtins.global_current_websocket[-1].send(cmd.to_bytes())
-			cmd, err = await builtins.global_wsnet_dispatch_table[self.token].get()
+			self.ws.send(to_js(cmd.to_bytes()))
+
+
+			datapromise, err = await self.__internal_in_q.get()
+			data_memview = await datapromise
+			data = data_memview.to_py()
+
+			cmd = CMD.from_bytes(bytearray(data))
+
 			#print('connect %s' % cmd)
 			if err is not None:
 				raise err
@@ -86,12 +109,23 @@ class WSNetworkTCP:
 			return False, e
 
 	async def run(self):
-		_, err = await self.connect()
-		if err is not None:
-			await self.in_q.put(None)
-			return False, err
-		
-		self.in_task = asyncio.create_task(self.__handle_in())
-		self.out_task = asyncio.create_task(self.__handle_out())
+		try:
+			js.console.log('This is new!')
+			self.connected_evt = asyncio.Event()
+			self.__internal_in_q = asyncio.Queue()
+			self.ws_url = js.document.getElementById('proxyurl')
+			self.ws = js.WebSocket.new(self.ws_url.value)
+			self.ws.addEventListener('open', lambda event: self.connected_evt.set())
+			self.ws.addEventListener('message', lambda event: self.data_in(event.data.arrayBuffer()))
 
-		return True, None
+			_, err = await self.connect()
+			if err is not None:
+				await self.in_q.put(None)
+				return False, err
+			
+			self.in_task = asyncio.create_task(self.__handle_in())
+			self.out_task = asyncio.create_task(self.__handle_out())
+
+			return True, None
+		except Exception as e:
+			return False, e
