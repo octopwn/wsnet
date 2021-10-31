@@ -110,7 +110,6 @@ class WSNetworkTCP:
 
 	async def run(self):
 		try:
-			js.console.log('This is new!')
 			self.connected_evt = asyncio.Event()
 			self.__internal_in_q = asyncio.Queue()
 			self.ws_url = js.document.getElementById('proxyurl')
