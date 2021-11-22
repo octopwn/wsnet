@@ -124,7 +124,7 @@ class OPServer:
 					)
 					for opid in self.operators:
 						try:
-							print(agentnotify.to_bytes())
+							#print(agentnotify.to_bytes())
 							await self.operators[opid].send(agentnotify.to_bytes())
 						except Exception as e:
 							del self.operators[opid]
@@ -165,17 +165,17 @@ class OPServer:
 			logger.info('Operator connected from %s:%d' % (remote_ip, remote_port))
 			while True:
 				data = await ws.recv()
-				print(data)
+				#print(data)
 				agentid = data[4:20]
 				agentdata = data[20:]
 				token = data[26:42]
-				print('agentid:   %s' % agentid)
-				print('token:     %s' % token)
-				print('agentdata: %s' % agentdata)
+				#print('agentid:   %s' % agentid)
+				#print('token:     %s' % token)
+				#print('agentdata: %s' % agentdata)
 
 				if token == b'\x00'*16 and agentid == b'\x00'*16:
 					cmd = CMD.from_bytes(agentdata)
-					print(cmd.type)
+					#print(cmd.type)
 					if cmd.type == CMDType.LISTAGENTS:
 						for agentid in self.agents:
 							agentinfo = self.agents[agentid]
@@ -190,7 +190,7 @@ class OPServer:
 								agentinfo.hostname,
 								agentinfo.usersid
 							)
-							print('Sending: %s' % reply.to_bytes())
+							#print('Sending: %s' % reply.to_bytes())
 							await ws.send(reply.to_bytes())
 						ok = WSNOK(token)
 						await ws.send(ok.to_bytes())
@@ -215,8 +215,9 @@ class OPServer:
 	async def run(self):
 		asyncio.create_task(self.__handle_signal_in_queue())
 		asyncio.create_task(self.__handle_in_queue())
-		for url in self.reverse_operators:
-			asyncio.create_task(self.__handle_reverse_operator(url))
+		if self.reverse_operators is not None and len(self.reverse_operators) > 0:
+			for url in self.reverse_operators:
+				asyncio.create_task(self.__handle_reverse_operator(url))
 		
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
 		await self.wsserver.wait_closed()
