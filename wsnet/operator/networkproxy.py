@@ -3,7 +3,7 @@ import asyncio
 import os
 import traceback
 import websockets
-from pyodidewsnet.protocol import OPCMD, CMD, WSNOK, CMDType, WSNSocketData, WSNConnect
+from wsnet.protocol import OPCMD, CMD, WSNOK, CMDType, WSNSocketData, WSNConnect
 
 
 class WSNetworkWS:
@@ -84,8 +84,10 @@ class WSNetworkWS:
 		try:
 			self.ws = await websockets.connect(self.url)
 			cmd = WSNConnect(self.token, 'TCP', self.ip, self.port)
+			print('WSNETWORKWS connect! %s' % cmd)
 			if self.agent_id is not None:
 				cmd = OPCMD(self.agent_id, cmd)
+			
 
 			await self.ws.send(cmd.to_bytes())
 			data = await self.ws.recv()
@@ -98,6 +100,7 @@ class WSNetworkWS:
 			raise Exception('Connection failed, expected CONTINUE, got %s' % cmd.type.value)
 				
 		except Exception as e:
+			traceback.print_exc()
 			return False, e
 
 	async def run(self):
