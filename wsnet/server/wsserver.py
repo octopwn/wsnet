@@ -22,7 +22,6 @@ class WSNETWSServer:
 		self.clients[client] = 1
 		await client.run()
 		await client.terminate()
-	
 
 	async def run(self):
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
@@ -39,12 +38,13 @@ async def amain(args):
 
 def main():
 	import argparse
+	import logging
 	parser = argparse.ArgumentParser(description='WSNET proxy server')
 	parser.add_argument('--ip', default='127.0.0.1', help='Listen IP')
 	parser.add_argument('--port', type=int, default=8700, help='Listen port')
 
 	args = parser.parse_args()
-
+	#logger.setLevel(logging.DEBUG)
 	asyncio.run(amain(args))
 
 if __name__ == '__main__':

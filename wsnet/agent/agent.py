@@ -58,7 +58,7 @@ class WSNETAgent:
 			logd['path'],
 			logd['msg'],
 		)
-		logger.info(logline)
+		logger.debug(logline)
 	
 	async def log_start(self, cmd, msg = ''):
 		await self.log_actions(cmd, 'START', msg)
@@ -106,8 +106,9 @@ class WSNETAgent:
 		try:
 			await self.log_start(cmd)
 			if cmd.protocol == 'TCP':
+				logger.debug('Client connecting to %s:%s' % (cmd.ip, cmd.port))
 				reader, writer = await asyncio.open_connection(cmd.ip, int(cmd.port))
-
+				logger.debug('Connection to %s:%s established' % (cmd.ip, cmd.port))
 				in_q = asyncio.Queue()
 				self.__process_queues[cmd.token] = in_q
 				out_task = asyncio.create_task(self.__socket_data_in_handle(cmd.token, in_q, reader, writer))
@@ -161,7 +162,7 @@ class WSNETAgent:
 			while True:
 				try:
 					data_raw = await self.ws.recv()
-					logger.debug('data_raw %s' % repr(data_raw))
+					#logger.debug('data_raw %s' % repr(data_raw))
 					
 					try:
 						cmd = CMD.from_bytes(data_raw)
