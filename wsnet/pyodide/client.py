@@ -11,7 +11,7 @@ except:
 	pass
 
 class WSNetworkTCP:
-	def __init__(self, ip, port, in_q, out_q):
+	def __init__(self, ip, port, in_q, out_q, reuse_ws = False):
 		self.connected_evt = None
 		self.disconnected_evt = None
 		self.ws_url = None
@@ -21,6 +21,7 @@ class WSNetworkTCP:
 		self.port = port
 		self.in_q = in_q
 		self.out_q = out_q
+		self.reuse_ws = reuse_ws
 		self.token = os.urandom(16)
 
 		self.in_task = None
@@ -32,6 +33,9 @@ class WSNetworkTCP:
 			self.in_task.cancel()
 		if self.out_task is not None:
 			self.out_task.cancel()
+		if self.ws is not None:
+			js.deleteWebSocket(self.ws)
+		self.ws = None
 	
 	def data_in(self, data):
 		try:
@@ -49,30 +53,33 @@ class WSNetworkTCP:
 		self.data_in(event.data.arrayBuffer())
 
 	async def __handle_in(self):
-		while not self.disconnected_evt.is_set():
-			try:
-				datapromise, err = await self.__internal_in_q.get()
-				data_memview = await datapromise
-				data = data_memview.to_py()
-				cmd = CMD.from_bytes(bytearray(data))
+		try:
+			while not self.disconnected_evt.is_set():
+				try:
+					datapromise, err = await self.__internal_in_q.get()
+					data_memview = await datapromise
+					data = data_memview.to_py()
+					cmd = CMD.from_bytes(bytearray(data))
 
-				#print('__handle_in %s' % cmd)
-				if err is not None:
-					raise err
-				if cmd.type == CMDType.OK:
-					print('Remote end terminated the socket')
-					raise Exception('Remote end terminated the socket')
-				elif cmd.type == CMDType.ERR:
-					print('Proxy sent error during data transmission. Killing the tunnel.')
-					raise Exception('Proxy sent error during data transmission. Killing the tunnel.')
+					#print('__handle_in %s' % cmd)
+					if err is not None:
+						raise err
+					if cmd.type == CMDType.OK:
+						print('Remote end terminated the socket')
+						raise Exception('Remote end terminated the socket')
+					elif cmd.type == CMDType.ERR:
+						print('Proxy sent error during data transmission. Killing the tunnel.')
+						raise Exception('Proxy sent error during data transmission. Killing the tunnel.')
 
-				await self.in_q.put((cmd.data, None))
-			except asyncio.CancelledError:
-				return
-			except Exception as e:
-				traceback.print_exc()
-				await self.in_q.put((None, e))
-				return
+					await self.in_q.put((cmd.data, None))
+				except asyncio.CancelledError:
+					return
+				except Exception as e:
+					traceback.print_exc()
+					await self.in_q.put((None, e))
+					return
+		finally:
+			await self.terminate()
 
 
 	async def __handle_out(self):
@@ -84,22 +91,23 @@ class WSNetworkTCP:
 					return
 				cmd = WSNSocketData(self.token, data)
 				#self.ws.send(to_js(cmd.to_bytes()))
-				js.sendWebScoketData(self.ws, to_js(cmd.to_bytes()))
+				js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
 		except Exception as e:
 			traceback.print_exc()
 			return
 		finally:
 			try:
 				cmd = WSNOK(self.token)
-				js.sendWebScoketData(self.ws, to_js(cmd.to_bytes()))
+				js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
 			except:
 				pass
+			await self.terminate()
 	
 	async def connect(self):
 		try:
 			await asyncio.wait_for(self.connected_evt.wait(), 10)
 			cmd = WSNConnect(self.token, 'TCP', self.ip, self.port)
-			js.sendWebScoketData(self.ws, to_js(cmd.to_bytes()))
+			js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
 
 
 			datapromise, err = await self.__internal_in_q.get()
@@ -129,7 +137,7 @@ class WSNetworkTCP:
 			disconnected_evt_proxy = create_proxy(self.set_disconnected_evt)
 			data_in_proxy = create_proxy(self.data_in_evt)
 			self.ws_url = js.document.getElementById('proxyurl')
-			self.ws = js.createNewWebScoket(str(self.ws_url.value), connected_evt_proxy, data_in_proxy, disconnected_evt_proxy)
+			self.ws = js.createNewWebSocket(str(self.ws_url.value), connected_evt_proxy, data_in_proxy, disconnected_evt_proxy, self.reuse_ws, to_js(self.token)) #self.token.hex().upper()
 			#self.ws_url = js.document.getElementById('proxyurl')
 			#self.ws = js.WebSocket.new(self.ws_url.value)
 			#self.ws.addEventListener('open', connected_evt_proxy)
@@ -146,4 +154,5 @@ class WSNetworkTCP:
 
 			return True, None
 		except Exception as e:
+			await self.terminate()
 			return False, e
