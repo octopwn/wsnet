@@ -13,7 +13,7 @@ length = total length of the "packet" including this length field
 
 class CMD:
 	def __init__(self):
-		self.type = None
+		self.type:CMDType = None
 
 	def to_bytes(self):
 		data = self.to_data()
@@ -69,6 +69,8 @@ from wsnet.protocol.authentication.sequenceno import WSNGetSequenceNo
 from wsnet.protocol.authentication.sequencenoreply import WSNGetSequenceNoReply
 from wsnet.protocol.common.listagents import WSNListAgents
 from wsnet.protocol.common.listagentsreply import WSNListAgentsReply
+from wsnet.protocol.connection.serversocketdata import WSNServerSocketData
+from wsnet.protocol.connection.wrapssl import WSNSocketWrapSSL
 
 
 
@@ -98,6 +100,8 @@ __all__ = [
 	'WSNGetInfo',
 	'WSNListAgents',
 	'WSNListAgentsReply',
+	'WSNServerSocketData',
+	'WSNSocketWrapSSL'
 
 ]
 
@@ -128,4 +132,6 @@ type2cmd = {
 	CMDType.GETINFOREPLY : WSNGetInfoReply,
 	CMDType.LISTAGENTS : WSNListAgents,
 	CMDType.AGENTINFO : WSNListAgentsReply,
+	CMDType.SDSRV : WSNServerSocketData,
+	CMDType.WRAPSSL : WSNSocketWrapSSL,
 }

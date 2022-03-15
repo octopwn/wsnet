@@ -25,3 +25,6 @@ class CMDType(enum.Enum):
 
 	LISTAGENTS = 100
 	AGENTINFO = 101
+
+	SDSRV = 200
+	WRAPSSL = 201
