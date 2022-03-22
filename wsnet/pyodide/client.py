@@ -91,10 +91,12 @@ class WSNetworkTCP:
 				if data is None or data == b'':
 					return
 				
+
 				if len(data) < 286295:
 					cmd = WSNSocketData(self.token, data)
 					js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
 				else:
+					# need to chunk the data because WS only accepts max 286295 bytes in one message
 					data = io.BytesIO(data)
 					while True:
 						chunk = data.read(286200)
