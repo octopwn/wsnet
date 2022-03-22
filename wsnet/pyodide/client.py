@@ -1,6 +1,7 @@
 
 import asyncio
 import os
+import io
 import traceback
 from wsnet.protocol import *
 
@@ -89,9 +90,19 @@ class WSNetworkTCP:
 				#print('OUT %s' % data)
 				if data is None or data == b'':
 					return
-				cmd = WSNSocketData(self.token, data)
-				#self.ws.send(to_js(cmd.to_bytes()))
-				js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+				
+				if len(data) < 286295:
+					cmd = WSNSocketData(self.token, data)
+					js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+				else:
+					data = io.BytesIO(data)
+					while True:
+						chunk = data.read(286200)
+						if chunk == b'':
+							break
+						cmd = WSNSocketData(self.token, chunk)
+						js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+
 		except Exception as e:
 			traceback.print_exc()
 			return
