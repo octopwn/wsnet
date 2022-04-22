@@ -35,13 +35,22 @@ class WSNGetInfoReply(CMD):
 		return WSNGetInfoReply(token, pid, username, domain, logonserver, cpuarch, hostname, usersid)
 	
 	def to_data(self):
-		raise NotImplementedError()
+		buff = io.BytesIO()
 		t = self.type.value.to_bytes(2, byteorder = 'big', signed = False)
 		if isinstance(self.token, str):
 			t += self.token.encode()
 		else:
 			t += self.token
-		return t
+		buff.write(t)
+		writeStr(buff, str(self.pid))
+		writeStr(buff, self.username, encoding='utf-16-le')
+		writeStr(buff, self.domain, encoding='utf-16-le')
+		writeStr(buff, self.logonserver, encoding='utf-16-le')
+		writeStr(buff, self.cpuarch)
+		writeStr(buff, self.hostname, encoding='utf-16-le')
+		writeStr(buff, self.usersid)
+		buff.seek(0,0)
+		return buff.read()
 	
 	def to_dict(self):
 		return {

@@ -1,4 +1,6 @@
+import platform
 import websockets
+import os
 import asyncio
 import uuid
 import enum
@@ -384,6 +386,36 @@ class WSNETAgent:
 						self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))
 					elif cmd.type == CMDType.SD:
 						await self.send_err(cmd, 'Unexpected token for socket data!', '')
+					elif cmd.type == CMDType.GETINFO:
+						try:
+							if platform.system() == 'Windows':
+								from winacl.functions.highlevel import get_logon_info
+								logon = get_logon_info()
+								info = WSNGetInfoReply(
+									cmd.token, 
+									str(os.getpid()), 
+									str(logon['username']),
+									str(logon['domain']),
+									str(logon['logonserver']), 
+									'X64', # TODO 
+									str(socket.getfqdn()), 
+									str(logon['usersid'])
+								)
+							else:
+								info = WSNGetInfoReply(
+									cmd.token, 
+									str(os.getpid()), 
+									str(os.getlogin()),
+									'',
+									'', 
+									'X64', # TODO 
+									str(socket.getfqdn()), 
+									''
+								)
+							await self.ws.send(info.to_bytes())
+							await self.send_ok(cmd)
+						except Exception as e:
+							await self.send_err(cmd, str(e), e)
 						
 				except Exception as e:
 					logger.exception('handle_incoming')
