@@ -42,9 +42,16 @@ def main():
 	parser = argparse.ArgumentParser(description='WSNET proxy server')
 	parser.add_argument('--ip', default='127.0.0.1', help='Listen IP')
 	parser.add_argument('--port', type=int, default=8700, help='Listen port')
+	parser.add_argument('-v', '--verbose', action='count', default=0, help='Increase verbosity, can be stacked')
 
 	args = parser.parse_args()
-	#logger.setLevel(logging.DEBUG)
+	if args.verbose == 1:
+		logger.setLevel(logging.DEBUG)
+			
+	elif args.verbose > 1:
+		logging.basicConfig(level=1)
+		logger.setLevel(logging.DEBUG)
+
 	asyncio.run(amain(args))
 
 if __name__ == '__main__':

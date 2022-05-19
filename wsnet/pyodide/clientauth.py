@@ -14,7 +14,7 @@ class WSNETAuth:
 	def __init__(self):
 		self.connected_evt = None
 		self.disconnected_evt = None
-		self.__internal_in_q = None
+		self.internal_in_q = None
 		self.ws_url = None
 		self.ws = None
 
@@ -22,34 +22,17 @@ class WSNETAuth:
 		self.iter = 0
 		self.ws = None
 		self.ws_url = None
-	
-	def set_connected_evt(self, *args):
-		self.connected_evt.set()
-	
-	def set_disconnected_evt(self, *args):
-		self.disconnected_evt.set()
-	
-	def data_in(self, data):
-		try:
-			self.__internal_in_q.put_nowait((data, None))
-		except Exception as e:
-			js.console.log(str(e))
-
-	def data_in_evt(self, event):
-		self.data_in(event.data.arrayBuffer())
 
 	async def disconnect(self):
 		return
 
 	async def read_in(self):
-		x = await self.__internal_in_q.get()
-		datapromise, err = x
-		if err is not None:
-			return None, err
-		data_memview = await datapromise
-		data = data_memview.to_py()
-		cmd = CMD.from_bytes(bytearray(data))
-		return cmd, None
+		try:
+			data_memview = await self.internal_in_q.get()
+			cmd = CMD.from_bytes(data_memview.to_py())
+			return cmd, None
+		except Exception as e:
+			return None, e
 
 	async def setup(self):
 		try:
@@ -57,11 +40,11 @@ class WSNETAuth:
 				return True, None
 			self.connected_evt = asyncio.Event()
 			self.disconnected_evt = asyncio.Event()
-			self.__internal_in_q = asyncio.Queue()
+			self.internal_in_q = asyncio.Queue()
 
-			connected_evt_proxy = create_proxy(self.set_connected_evt)
-			disconnected_evt_proxy = create_proxy(self.set_disconnected_evt)
-			data_in_proxy = create_proxy(self.data_in_evt)
+			connected_evt_proxy = create_proxy(self.connected_evt)
+			disconnected_evt_proxy = create_proxy(self.disconnected_evt)
+			data_in_proxy = create_proxy(self.internal_in_q)
 			self.ws_url = js.document.getElementById('proxyurl')
 			self.ws = js.createNewWebSocket(str(self.ws_url.value), connected_evt_proxy, data_in_proxy, disconnected_evt_proxy, True, to_js(self.token))
 			await asyncio.wait_for(self.connected_evt.wait(), 5)
@@ -74,7 +57,7 @@ class WSNETAuth:
 			await self.setup()
 			cmd = WSNGetSequenceNo(self.token)
 			#print(cmd.to_bytes())
-			js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+			js.sendWebSocketData(self.ws, cmd.to_bytes())
 			reply, err = await self.read_in()
 			#print('reply %s' % reply)
 
@@ -94,7 +77,7 @@ class WSNETAuth:
 			await self.setup()
 			cmd = WSNGetSessionKey(self.token)
 			#print(cmd.to_bytes())
-			js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+			js.sendWebSocketData(self.ws, cmd.to_bytes())
 			reply, err = await self.read_in()
 			if err is not None:
 				raise err
@@ -112,7 +95,7 @@ class WSNETAuth:
 			if auth_type.upper() == 'KERBEROS':
 				cmd = WSNKerberosAuth(self.token, target, username, credusage, flags, authdata)
 				#print(cmd.to_bytes())
-				js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+				js.sendWebSocketData(self.ws, cmd.to_bytes())
 				reply, err = await self.read_in()
 				if err is not None:
 					raise err
@@ -127,7 +110,7 @@ class WSNETAuth:
 				if self.iter == 0:
 					cmd = WSNNTLMAuth(self.token, username, credusage, flags, target)
 					#print(cmd.to_bytes())
-					js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+					js.sendWebSocketData(self.ws, cmd.to_bytes())
 					reply, err = await self.read_in()
 					if err is not None:
 						raise err
@@ -140,7 +123,7 @@ class WSNETAuth:
 				elif self.iter == 1:
 					cmd = WSNNTLMChallenge(self.token, authdata, flags, target)
 					#print(cmd.to_bytes())
-					js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+					js.sendWebSocketData(self.ws, cmd.to_bytes())
 					reply, err = await self.read_in()
 					if err is not None:
 						raise err

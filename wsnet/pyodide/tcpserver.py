@@ -245,7 +245,7 @@ class WSNetworkTCPServer:
 		self.server_closed_evt = asyncio.Event()
 
 		self.in_task = None
-		self.__internal_in_q = None
+		self.internal_in_q = None
 
 	async def terminate(self):
 		if self.in_task is not None:
@@ -253,33 +253,13 @@ class WSNetworkTCPServer:
 		if self.ws is not None:
 			js.deleteWebSocket(self.ws)
 		self.ws = None
-	
-	def data_in(self, data):
-		try:
-			self.__internal_in_q.put_nowait((data, None))
-		except Exception as e:
-			js.console.log(str(e))
-	
-	def set_connected_evt(self, *args):
-		self.connected_evt.set()
-	
-	def set_disconnected_evt(self, *args):
-		self.disconnected_evt.set()
-
-	def data_in_evt(self, event):
-		self.data_in(event.data.arrayBuffer())
 
 	async def __handle_in(self):
 		try:
 			while not self.disconnected_evt.is_set():
 				try:
-					datapromise, err = await self.__internal_in_q.get()
-					if err is not None:
-						raise err
-
-					data_memview = await datapromise
-					data = data_memview.to_py()
-					cmd = CMD.from_bytes(bytearray(data))
+					data_memview = await self.internal_in_q.get()
+					cmd = CMD.from_bytes(bytearray(data_memview.to_py()))
 					if cmd.type == CMDType.OK:
 						print('Remote end terminated the server')
 						raise Exception('Remote end terminated the server')
@@ -307,18 +287,12 @@ class WSNetworkTCPServer:
 				bind = True,
 				bindtype = self.bindtype
 			)
-			js.sendWebSocketData(self.ws, to_js(cmd.to_bytes()))
+			js.sendWebSocketData(self.ws, cmd.to_bytes())
 
 
-			datapromise, err = await self.__internal_in_q.get()
-			data_memview = await datapromise
-			data = data_memview.to_py()
-
-			cmd = CMD.from_bytes(bytearray(data))
-
-			#print('connect %s' % cmd)
-			if err is not None:
-				raise err
+			data_memview = await self.internal_in_q.get()
+			cmd = CMD.from_bytes(data_memview.to_py())
+			
 			if cmd.type == CMDType.CONTINUE:
 				return True, None
 			if cmd.type == CMDType.ERR:
@@ -333,10 +307,10 @@ class WSNetworkTCPServer:
 			self.server_closed_evt = asyncio.Event()
 			self.connected_evt = asyncio.Event()
 			self.disconnected_evt = asyncio.Event()
-			self.__internal_in_q = asyncio.Queue()
-			connected_evt_proxy = create_proxy(self.set_connected_evt)
-			disconnected_evt_proxy = create_proxy(self.set_disconnected_evt)
-			data_in_proxy = create_proxy(self.data_in_evt)
+			self.internal_in_q = asyncio.Queue()
+			connected_evt_proxy = create_proxy(self.connected_evt)
+			disconnected_evt_proxy = create_proxy(self.disconnected_evt)
+			data_in_proxy = create_proxy(self.internal_in_q)
 			self.ws_url = js.document.getElementById('proxyurl')
 			self.ws = js.createNewWebSocket(str(self.ws_url.value), connected_evt_proxy, data_in_proxy, disconnected_evt_proxy, self.reuse_ws, to_js(self.token)) #self.token.hex().upper()
 			_, err = await self.connect()
