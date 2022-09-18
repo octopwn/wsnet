@@ -12,7 +12,8 @@ from wsnet.protocol import *
 
 try:
 	import js
-	from pyodide import to_js, create_proxy
+	from pyodide.ffi import to_js
+	from pyodide import create_proxy
 except:
 	pass
 
