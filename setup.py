@@ -41,6 +41,7 @@ setup(
 	install_requires=[
 		'websockets',
 		'aiohttp',
+		'aiosmb>=0.4.4'
 	],
 	
 	classifiers=(
@@ -50,7 +51,9 @@ setup(
 	),
 	entry_points={
 		'console_scripts': [
-			'wssserver = wsnet.server.wsserver:main',
+			'wsnet-wssserver = wsnet.server.wsserver:main',
+			'wsnet-wspipe = wsnet.server.wsserversmbpipe:main',
+			'wsnet-sockspipe = wsnet.server.pipesocks:main',
 		],
 	
 	}
