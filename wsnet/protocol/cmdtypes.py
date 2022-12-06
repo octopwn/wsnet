@@ -3,6 +3,7 @@ import enum
 class CMDType(enum.Enum):
 	OK = 0
 	ERR = 1
+	NOP = 254
 	LOG = 2
 	STOP = 3
 	CONTINUE = 4

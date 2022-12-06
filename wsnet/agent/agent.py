@@ -357,66 +357,71 @@ class WSNETAgent:
 			writer.close()
 			del self.__process_queues[token]
 
-
+	async def process_incoming(self, data_raw):
+		try:
+			try:
+				cmd = CMD.from_bytes(data_raw)
+			except Exception as e:
+				logger.exception('CMD raw parsing failed! %s' % repr(data_raw))
+				return True, None
+					
+			if cmd.token in self.__process_queues:
+				await self.__process_queues[cmd.token].put(cmd)
+				return True, None
+					
+			if cmd.type == CMDType.SDSRV:
+				cmd = typing.cast(WSNServerSocketData, cmd)
+				if cmd.token in self.__server_queues:
+					if cmd.connectiontoken in self.__server_queues:
+						await self.__server_queues[cmd.connectiontoken].put(cmd)
+					
+			if cmd.type == CMDType.CONNECT: 
+				self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))
+			elif cmd.type == CMDType.SD:
+				await self.send_err(cmd, 'Unexpected token for socket data!', '')
+			elif cmd.type == CMDType.GETINFO:
+				try:
+					if platform.system() == 'Windows':
+						from winacl.functions.highlevel import get_logon_info
+						logon = get_logon_info()
+						info = WSNGetInfoReply(
+							cmd.token, 
+							str(os.getpid()), 
+							str(logon['username']),
+							str(logon['domain']),
+							str(logon['logonserver']), 
+							'X64', # TODO 
+							str(socket.getfqdn()), 
+							str(logon['usersid'])
+						)
+					else:
+						info = WSNGetInfoReply(
+							cmd.token, 
+							str(os.getpid()), 
+							str(os.getlogin()),
+							'',
+							'', 
+							'X64', # TODO 
+							str(socket.getfqdn()), 
+							''
+						)
+					await self.ws.send(info.to_bytes())
+					await self.send_ok(cmd)
+				except Exception as e:
+					await self.send_err(cmd, str(e), e)
+			return True, None
+		except Exception as e:
+			logger.exception('handle_incoming')
+			return None, e
 
 	async def handle_incoming(self):
 		try:
 			while True:
 				try:
 					data_raw = await self.ws.recv()
-					#logger.debug('data_raw %s' % repr(data_raw))
-					
-					try:
-						cmd = CMD.from_bytes(data_raw)
-					except Exception as e:
-						logger.exception('CMD raw parsing failed! %s' % repr(data_raw))
-						continue
-					
-					if cmd.token in self.__process_queues:
-						await self.__process_queues[cmd.token].put(cmd)
-						continue
-					
-					if cmd.type == CMDType.SDSRV:
-						cmd = typing.cast(WSNServerSocketData, cmd)
-						if cmd.token in self.__server_queues:
-							if cmd.connectiontoken in self.__server_queues:
-								await self.__server_queues[cmd.connectiontoken].put(cmd)
-					
-					if cmd.type == CMDType.CONNECT: 
-						self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))
-					elif cmd.type == CMDType.SD:
-						await self.send_err(cmd, 'Unexpected token for socket data!', '')
-					elif cmd.type == CMDType.GETINFO:
-						try:
-							if platform.system() == 'Windows':
-								from winacl.functions.highlevel import get_logon_info
-								logon = get_logon_info()
-								info = WSNGetInfoReply(
-									cmd.token, 
-									str(os.getpid()), 
-									str(logon['username']),
-									str(logon['domain']),
-									str(logon['logonserver']), 
-									'X64', # TODO 
-									str(socket.getfqdn()), 
-									str(logon['usersid'])
-								)
-							else:
-								info = WSNGetInfoReply(
-									cmd.token, 
-									str(os.getpid()), 
-									str(os.getlogin()),
-									'',
-									'', 
-									'X64', # TODO 
-									str(socket.getfqdn()), 
-									''
-								)
-							await self.ws.send(info.to_bytes())
-							await self.send_ok(cmd)
-						except Exception as e:
-							await self.send_err(cmd, str(e), e)
-						
+					_, err = await self.process_incoming(data_raw)
+					if err is not None:
+						raise err
 				except Exception as e:
 					logger.exception('handle_incoming')
 					return

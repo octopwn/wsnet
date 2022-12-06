@@ -47,6 +47,7 @@ class OPCMD:
 
 from wsnet.protocol.cmdtypes import CMDType
 from wsnet.protocol.common.ok import WSNOK
+from wsnet.protocol.common.nop import WSNNOP
 from wsnet.protocol.common.err import WSNErr
 from wsnet.protocol.common.log import WSNLog
 from wsnet.protocol.common.stop import WSNStop
@@ -79,6 +80,7 @@ __all__ = [
 	'CMD',
 	'OPCMD',
 	'WSNOK',
+	'WSNNOP',
 	'WSNErr',
 	'WSNLog',
 	'WSNContinue',
@@ -111,6 +113,7 @@ BINARY_TYPES = [
 
 type2cmd = {
 	CMDType.OK : WSNOK,
+	CMDType.NOP : WSNNOP,
 	CMDType.ERR : WSNErr,
 	CMDType.LOG : WSNLog,
 	CMDType.CONTINUE : WSNContinue,
