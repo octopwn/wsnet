@@ -6,7 +6,7 @@ It's actually Layer3 agnostic, but websockets was easy to use.
 ## Install
 Either use PIP `pip install wsnet` or clone + install via GitHub.
 ## Starting server
-After installing you should have a new binary called `wssserver`.  
+After installing you should have a new binary called `wsnet-wssserver`.  
 It has a help menu, but really there is not much to change there.
 
 # If you are here to see what this is
