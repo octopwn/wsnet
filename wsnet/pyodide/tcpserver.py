@@ -181,25 +181,25 @@ class WSNetworkServerTCPWriter:
 		await asyncio.sleep(0)
 
 class WSNetworkServerTCPServer:
-	def __init__(self, ws, token, handle_client_cb, closed_event:asyncio.Event):
+	def __init__(self, ws, token, handle_client_cb, closed_evt:asyncio.Event):
 		self.ws = ws
 		self.token = token
-		self.closed_event = closed_event
+		self.closed_evt = closed_evt
 		self.sockets = []
 		self.handle_client_cb = handle_client_cb
 		self.connections = {}
 	
 	async def serve_forever(self):
 		try:
-			await self.closed_event.wait()
+			await self.closed_evt.wait()
 		except:
-			self.closed_event.set()
+			self.closed_evt.set()
 		
 	def is_serving(self):
-		return not self.closed_event.is_set()
+		return not self.closed_evt.is_set()
 	
 	async def wait_closed(self):
-		await self.closed_event.wait()
+		await self.closed_evt.wait()
 
 	async def handle_new_connection(self, cmd:WSNServerSocketData):
 		try:
@@ -243,7 +243,7 @@ class WSNetworkTCPServer:
 		self.handle_client_cb = handle_client_cb
 		self.token = os.urandom(16)
 		self.server = None
-		self.server_closed_evt = asyncio.Event()
+		self.closed_evt = asyncio.Event()
 
 		self.in_task = None
 		self.internal_in_q = None
@@ -305,7 +305,7 @@ class WSNetworkTCPServer:
 
 	async def run(self):
 		try:
-			self.server_closed_evt = asyncio.Event()
+			self.closed_evt = asyncio.Event()
 			self.connected_evt = asyncio.Event()
 			self.disconnected_evt = asyncio.Event()
 			self.internal_in_q = asyncio.Queue()
@@ -319,10 +319,11 @@ class WSNetworkTCPServer:
 				return False, err
 			
 			
-			self.server = WSNetworkServerTCPServer(self.ws, self.token, self.server_closed_evt )
+			self.server = WSNetworkServerTCPServer(self.ws, self.token, self.handle_client_cb, self.closed_evt )
 			self.in_task = asyncio.create_task(self.__handle_in())
 
 			return self.server, None
 		except Exception as e:
+			traceback.print_exc()
 			await self.terminate()
 			return False, e

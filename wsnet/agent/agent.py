@@ -224,10 +224,10 @@ class WSNETAgent:
 						self.__server_queues[cmd.token] = {}
 						logger.debug('Client binding to %s:%s' % (cmd.ip, cmd.port))
 						disconnected_evt = asyncio.Event()
-						server = await asyncio.start_server(lambda r, w: self.handle_server_client(r, w, cmd.token, disconnected_evt), cmd.ip, int(cmd.port))
+						server = await asyncio.start_server(lambda r, w: self.handle_server_client(cmd.token, r, w, disconnected_evt), cmd.ip, int(cmd.port))
 						async with server:
 							await self.send_continue(cmd)
-							server.serve_forever()
+							await server.serve_forever()
 					else:
 						await self.send_err(cmd, 'Selected bindtype not implemented for TCP')
 				else:

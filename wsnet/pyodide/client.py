@@ -46,17 +46,16 @@ class WSNetworkTCP:
 					data_memview = await self.internal_in_q.get()
 					cmd = CMD.from_bytes(data_memview.to_py())
 					if cmd.type == CMDType.OK:
-						print('Remote end terminated the socket')
+						#print('Remote end terminated the socket')
 						raise Exception('Remote end terminated the socket')
 					elif cmd.type == CMDType.ERR:
-						print('Proxy sent error during data transmission. Killing the tunnel.')
+						#print('Proxy sent error during data transmission. Killing the tunnel.')
 						raise Exception('Proxy sent error during data transmission. Killing the tunnel.')
 
 					await self.in_q.put((cmd.data, None))
 				except asyncio.CancelledError:
 					return
 				except Exception as e:
-					traceback.print_exc()
 					await self.in_q.put((None, e))
 					return
 		finally:
