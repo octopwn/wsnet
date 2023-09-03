@@ -1,20 +1,21 @@
 import platform
-import websockets
 import os
 import asyncio
-import uuid
-import enum
-import datetime
 import socket
 import struct
 import ipaddress
 import typing
+import traceback
 
 from wsnet import logger
 from wsnet.protocol import *
 
-class dummyEnum(enum.Enum):
-	UNKNOWN = 'UNKNOWN'
+class GenericTransport:
+	def __init__(self):
+		pass
+
+	async def send(self, data:bytes):
+		raise NotImplementedError()
 
 # https://gist.github.com/vxgmichel/e47bff34b68adb3cf6bd4845c4bed448
 class UDPServerProtocol:
@@ -36,16 +37,11 @@ class UDPServerProtocol:
 		self.in_queue.put_nowait((None, exc))
 
 class WSNETAgent:
-	def __init__(self, ws, session_id = None, db_session = None):
-		self.ws = ws
-		self.db_session = db_session
-		self.incoming_task = None
-		self.send_full_exception = False
-		self.file_chunk_size = 4096
-		self.session_id = session_id if session_id is not None else str(uuid.uuid4())
+	def __init__(self, transport:GenericTransport, send_full_exception:bool = True):
+		self.transport = transport
+		self.send_full_exception = send_full_exception
 
 		self.connections = {} #connection_id -> smbmachine
-		#self.shares = {} #connection_id -> {sharename} -> SMBShare
 		self.__conn_id = 0
 		self.__process_queues = {} #token -> in_queue
 		self.__server_queues = {} #token -> {connectiontoken -> in_queue}
@@ -56,73 +52,27 @@ class WSNETAgent:
 		self.__conn_id += 1
 		return str(t)
 
-	async def log_actions(self, cmd, state, msg):
-		cmd = cmd.__dict__
-		path = cmd.get('path')
-
-		logd = {
-			'timestamp' : datetime.datetime.utcnow().isoformat(),
-			'sessionid' : self.session_id,
-			'connectionid' : cmd.get('cid'),
-			'token' : cmd.get('token', b'').hex(),
-			'cmdtype' : cmd.get('type', dummyEnum.UNKNOWN).value,
-			'state' : state,
-			'path' : path,
-			'msg' : msg,
-		}
-
-		logline = '[%s][%s][%s][%s][%s][%s][%s] %s' % (
-			logd['timestamp'], 
-			logd['sessionid'], 
-			logd['connectionid'], 
-			logd['token'], 
-			logd['cmdtype'], 
-			logd['state'], 
-			logd['path'],
-			logd['msg'],
-		)
-		logger.debug(logline)
-	
-	async def log_start(self, cmd, msg = ''):
-		await self.log_actions(cmd, 'START', msg)
-	
-	async def log_ok(self, cmd, msg = ''):
-		await self.log_actions(cmd, 'DONE', msg)
-
-	async def log_err(self, cmd, exc):
-		await self.log_actions(cmd, 'ERR', str(exc)) #TODO: better exception formatting?
-
 	async def terminate(self):
 		#not a command, only called when the connection is lost so the smb clients can be shut down safely
 		pass
 	
+	async def send_data(self, data:bytes):
+		await self.transport.send(data)
 
 	async def send_ok(self, cmd):
-		try:
-			reply = WSNOK(cmd.token)
-			await self.log_ok(cmd)
-			await self.ws.send(reply.to_bytes())
-			
-		except Exception as e:
-			logger.exception('send_ok')
+		reply = WSNOK(cmd.token)
+		await self.send_data(reply.to_bytes())
 
 	async def send_continue(self, cmd):
-		try:
-			reply = WSNContinue(cmd.token)
-			await self.ws.send(reply.to_bytes())
-		except Exception as e:
-			logger.exception('send_continue')
+		reply = WSNContinue(cmd.token)
+		await self.send_data(reply.to_bytes())
 
 	async def send_err(self, cmd, reason, exc):
-		try:
-			extra = ''
-			if self.send_full_exception is True:
-				extra = str(exc)
-			reply = WSNErr(cmd.token, reason, extra)
-			await self.log_err(cmd, exc)
-			await self.ws.send(reply.to_bytes())
-		except Exception as e:
-			logger.exception('send_err')
+		extra = ''
+		if self.send_full_exception is True:
+			extra = str(exc)
+		reply = WSNErr(cmd.token, reason, extra)
+		await self.send_data(reply.to_bytes())
 
 	async def handle_udp_writer(self, token, connectiontoken, transport, disconnected_evt):
 		try:
@@ -161,7 +111,7 @@ class WSNETAgent:
 			while not disconnected_evt.is_set():
 				data = await reader.read(65536)
 				reply = WSNServerSocketData(token, connectiontoken, data)
-				await self.ws.send(reply.to_bytes())
+				await self.send_data(reply.to_bytes())
 				if data == b'':
 					return
 
@@ -177,7 +127,6 @@ class WSNETAgent:
 	async def socket_connect(self, cmd:WSNConnect):
 		out_task = None
 		try:
-			await self.log_start(cmd)
 			if cmd.bind is False:
 				if cmd.protocol == 'TCP':
 					logger.debug('Client connecting to %s:%s' % (cmd.ip, cmd.port))
@@ -195,7 +144,7 @@ class WSNETAgent:
 							return
 
 						reply = WSNSocketData(cmd.token, data)
-						await self.ws.send(reply.to_bytes())
+						await self.send_data(reply.to_bytes())
 
 					return
 				else:
@@ -213,7 +162,7 @@ class WSNETAgent:
 						x = await in_queue.get()
 						data, addr = x
 						reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-						await self.ws.send(reply.to_bytes())
+						await self.send_data(reply.to_bytes())
 					
 					servertransport.close()
 			else:
@@ -246,7 +195,7 @@ class WSNETAgent:
 							x = await in_queue.get()
 							data, addr = x
 							reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-							await self.ws.send(reply.to_bytes())
+							await self.send_data(reply.to_bytes())
 						
 						servertransport.close()
 						
@@ -273,7 +222,7 @@ class WSNETAgent:
 							x = await in_queue.get()
 							data, addr = x
 							reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-							await self.ws.send(reply.to_bytes())
+							await self.send_data(reply.to_bytes())
 						
 						servertransport.close()
 					
@@ -296,7 +245,7 @@ class WSNETAgent:
 							x = await in_queue.get()
 							data, addr = x
 							reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-							await self.ws.send(reply.to_bytes())
+							await self.send_data(reply.to_bytes())
 						
 						servertransport.close()
 					
@@ -323,14 +272,14 @@ class WSNETAgent:
 							x = await in_queue.get()
 							data, addr = x
 							reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-							await self.ws.send(reply.to_bytes())
+							await self.send_data(reply.to_bytes())
 						
 						servertransport.close()
 
 
 
 		except Exception as e:
-			logger.exception('socket_connect')
+			logger.debug("Socket handling error: %s\n%s", e, traceback.format_exc())
 			await self.send_err(cmd, 'Socket connect failed', e)
 		finally:
 			if out_task is not None:
@@ -357,7 +306,7 @@ class WSNETAgent:
 			writer.close()
 			del self.__process_queues[token]
 
-	async def process_incoming(self, data_raw):
+	async def process_incoming(self, data_raw:bytes):
 		try:
 			try:
 				cmd = CMD.from_bytes(data_raw)
@@ -405,7 +354,7 @@ class WSNETAgent:
 							str(socket.getfqdn()), 
 							''
 						)
-					await self.ws.send(info.to_bytes())
+					await self.send_data(info.to_bytes())
 					await self.send_ok(cmd)
 				except Exception as e:
 					await self.send_err(cmd, str(e), e)
@@ -413,22 +362,3 @@ class WSNETAgent:
 		except Exception as e:
 			logger.exception('handle_incoming')
 			return None, e
-
-	async def handle_incoming(self):
-		try:
-			while True:
-				try:
-					data_raw = await self.ws.recv()
-					_, err = await self.process_incoming(data_raw)
-					if err is not None:
-						raise err
-				except Exception as e:
-					logger.exception('handle_incoming')
-					return
-		finally:
-			pass
-			#await self.__disconnect_all()
-
-	async def run(self):
-		self.incoming_task = asyncio.create_task(self.handle_incoming())
-		await self.incoming_task

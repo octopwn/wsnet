@@ -3,6 +3,7 @@ import websockets
 import asyncio
 import ssl
 import uuid
+from typing import Dict
 from urllib.parse import urlparse
 
 from wsnet import logger
@@ -15,7 +16,7 @@ WSNET_ALLOWED_ORIGINS = {
 }
 
 class WSNETWSServer:
-	def __init__(self, listen_ip:str = '127.0.0.1', listen_port:int = 8700, ssl_ctx:ssl.SSLContext = None, secret:str = None, disable_origin_check:bool = False):
+	def __init__(self, listen_ip:str = '127.0.0.1', listen_port:int = 8700, ssl_ctx:ssl.SSLContext = None, secret:str = None, disable_origin_check:bool = False, allowed_origins:Dict[str, int] = WSNET_ALLOWED_ORIGINS):
 		self.listen_ip = listen_ip
 		self.listen_port = listen_port
 		self.ssl_ctx = ssl_ctx
@@ -25,6 +26,7 @@ class WSNETWSServer:
 		self.secret = secret
 		if self.secret is None or self.secret == '':
 			self.secret = str(uuid.uuid4())
+		self.allowed_origins = allowed_origins
 	
 	def validate_client(self, remote_ip:str, remote_port:int, path:str, origin_header:str):
 		# Problem is that local websockets server can be reached from any webpage the user might browse to
@@ -49,12 +51,13 @@ class WSNETWSServer:
 			# Concern #1: The static webpage of octopwn can be loaded via HTTP, so a MITM could serve a malicious page
 			# Concern #2: Octopwn might be reached via a company proxy that intercepts TLS, which could be malicious
 			return
-		if origin != self.listen_ip:
+		if origin.lower() not in self.allowed_origins:
 			raise Exception('Client provided an invalid Origin header %s! Terminating connection' % origin)
 		
 	async def handle_client(self, ws, path:str):
 		remote_ip, remote_port = ws.remote_address
-		logger.info('Client connected from %s:%d' % (remote_ip, remote_port))
+		raddr = '%s:%d' % (remote_ip, remote_port)
+		logger.info('[%s] Client connected' % raddr)
 
 		try:
 			self.validate_client(remote_ip, remote_port, path, ws.request_headers.get('Origin', None))
@@ -65,8 +68,14 @@ class WSNETWSServer:
 		# Now that the client connection has been validated, we can continue actually initializing the client
 		client = WSNETAgent(ws)
 		self.clients[client] = 1
-		await client.run()
-		await client.terminate()
+		try:
+			async for data in ws:
+				await client.process_incoming(data)
+		except Exception as e:
+			logger.info('[%s] Client disconnected' % raddr)
+			logger.debug("Websockets client error: %s\n%s", e, traceback.format_exc())
+		finally:
+			await client.terminate()
 
 	async def run(self):
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
