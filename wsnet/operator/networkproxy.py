@@ -41,7 +41,6 @@ class WSNetworkWS:
 			try:
 				data = await self.ws.recv()
 				cmd = CMD.from_bytes(data)
-
 				if cmd.type == CMDType.OK:
 					print('Remote end terminated the socket')
 					raise Exception('Remote end terminated the socket')
@@ -113,3 +112,26 @@ class WSNetworkWS:
 		self.out_task = asyncio.create_task(self.__handle_out())
 
 		return True, None
+
+async def amain():
+	in_q = asyncio.Queue()
+	out_q = asyncio.Queue()
+	test = WSNetworkWS('google.com', 80, 'ws://127.0.0.1:8700', in_q, out_q, agent_id = None)
+	await test.run()
+	await out_q.put(b'GET / HTTP/1.1\r\nHost: google.com\r\n\r\n')
+	data, err = await in_q.get()
+	if err is not None:
+		print(err)
+		return
+	print(data)
+
+	await out_q.put(b'')
+	data, err = await in_q.get()
+
+
+def main():
+	import asyncio
+	asyncio.run(amain())
+
+if __name__ == '__main__':
+	main()

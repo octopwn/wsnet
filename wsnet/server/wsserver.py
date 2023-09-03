@@ -2,23 +2,67 @@ import traceback
 import websockets
 import asyncio
 import ssl
+import uuid
+from urllib.parse import urlparse
 
 from wsnet import logger
 from wsnet.agent.agent import WSNETAgent
 
-
+WSNET_ALLOWED_ORIGINS = {
+	'0.0.0.0' : 1,
+	'127.0.0.1' : 1,
+	'localhost' : 1,
+}
 
 class WSNETWSServer:
-	def __init__(self, listen_ip = '127.0.0.1', listen_port = 8700, ssl_ctx = None):
+	def __init__(self, listen_ip:str = '127.0.0.1', listen_port:int = 8700, ssl_ctx:ssl.SSLContext = None, secret:str = None, disable_origin_check:bool = False):
 		self.listen_ip = listen_ip
 		self.listen_port = listen_port
 		self.ssl_ctx = ssl_ctx
 		self.wsserver = None
 		self.clients = {}
+		self.disable_origin_check = disable_origin_check
+		self.secret = secret
+		if self.secret is None or self.secret == '':
+			self.secret = str(uuid.uuid4())
+	
+	def validate_client(self, remote_ip:str, remote_port:int, path:str, origin_header:str):
+		# Problem is that local websockets server can be reached from any webpage the user might browse to
+		# This would allow a malicious page to use this proxy to do nasty things.
+		# For this, the following security measurements have been applied:
+		# 1. This server can only be reached if via a correct path, otherwise connection will be terminated
+		# 2. The initial connection's Origin header must be in the tusted origins list
 
-	async def handle_client(self, ws, path):
+		if path.replace('/', '') != self.secret:
+			raise Exception('Incoming client provided an invalid secret! Terminating connection')
+		
+		if self.disable_origin_check is True:
+			return
+		
+		if origin_header is None:
+			raise Exception('Incoming client did not provide an Origin header! Terminating connection')
+		
+		parsed_origin = urlparse(origin_header)
+		origin = parsed_origin.hostname
+		if origin.endswith('.octopwn.com') is True:
+			# This is a subdomain of octopwn.com, the site is served from the official server, so we can trust it
+			# Concern #1: The static webpage of octopwn can be loaded via HTTP, so a MITM could serve a malicious page
+			# Concern #2: Octopwn might be reached via a company proxy that intercepts TLS, which could be malicious
+			return
+		if origin != self.listen_ip:
+			raise Exception('Client provided an invalid Origin header %s! Terminating connection' % origin)
+		
+	async def handle_client(self, ws, path:str):
 		remote_ip, remote_port = ws.remote_address
 		logger.info('Client connected from %s:%d' % (remote_ip, remote_port))
+
+		try:
+			self.validate_client(remote_ip, remote_port, path, ws.request_headers.get('Origin', None))
+		except Exception as e:
+			print('Failed to validate Origin header! Reason: %s' % e)
+			return
+		
+		# Now that the client connection has been validated, we can continue actually initializing the client
 		client = WSNETAgent(ws)
 		self.clients[client] = 1
 		await client.run()
@@ -26,6 +70,10 @@ class WSNETWSServer:
 
 	async def run(self):
 		self.wsserver = await websockets.serve(self.handle_client, self.listen_ip, self.listen_port, ssl=self.ssl_ctx)
+		proto = 'ws'
+		if self.ssl_ctx is not None:
+			proto = 'wss'
+		print('Listening on %s://%s:%d/%s/' % (proto, self.listen_ip, self.listen_port, self.secret))
 		await self.wsserver.wait_closed()
 
 
@@ -41,7 +89,14 @@ async def amain(args):
 				ssl_ctx.load_verify_locations(args.ssl_ca)
 				ssl_ctx.verify_mode = ssl.CERT_REQUIRED
 
-		server = WSNETWSServer(listen_ip=args.ip, listen_port=args.port, ssl_ctx=ssl_ctx)
+		server = WSNETWSServer(
+			listen_ip=args.ip, 
+			listen_port=args.port, 
+			ssl_ctx=ssl_ctx, 
+			secret = args.secret, 
+			disable_origin_check=args.noorigin
+		)
+
 		await server.run()
 
 	except:
@@ -57,6 +112,9 @@ def main():
 	parser.add_argument('--ssl-cert', help='Certificate file for SSL')
 	parser.add_argument('--ssl-key',  help='Key file for SSL')
 	parser.add_argument('--ssl-ca',  help='CA cert file for client cert validations')
+	parser.add_argument('--secret',  type=str, help='Secret string to protect this proxy from malicious connections')
+	parser.add_argument('--noorigin', action='store_true', help='Disables origin header validation')
+
 
 	args = parser.parse_args()
 	if args.verbose == 1:
