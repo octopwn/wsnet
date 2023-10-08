@@ -16,7 +16,7 @@ WSNET_ALLOWED_ORIGINS = {
 }
 
 class WSNETWSServer:
-	def __init__(self, listen_ip:str = '127.0.0.1', listen_port:int = 8700, ssl_ctx:ssl.SSLContext = None, secret:str = None, disable_origin_check:bool = False, allowed_origins:Dict[str, int] = WSNET_ALLOWED_ORIGINS):
+	def __init__(self, listen_ip:str = '127.0.0.1', listen_port:int = 8700, ssl_ctx:ssl.SSLContext = None, secret:str = None, disable_origin_check:bool = False, allowed_origins:Dict[str, int] = WSNET_ALLOWED_ORIGINS, disable_security:bool = False):
 		self.listen_ip = listen_ip
 		self.listen_port = listen_port
 		self.ssl_ctx = ssl_ctx
@@ -27,6 +27,9 @@ class WSNETWSServer:
 		if self.secret is None or self.secret == '':
 			self.secret = str(uuid.uuid4())
 		self.allowed_origins = allowed_origins
+		self.disable_security = disable_security
+		if self.disable_security is True:
+			self.secret = None
 	
 	def validate_client(self, remote_ip:str, remote_port:int, path:str, origin_header:str):
 		# Problem is that local websockets server can be reached from any webpage the user might browse to
@@ -59,11 +62,12 @@ class WSNETWSServer:
 		raddr = '%s:%d' % (remote_ip, remote_port)
 		logger.info('[%s] Client connected' % raddr)
 
-		try:
-			self.validate_client(remote_ip, remote_port, path, ws.request_headers.get('Origin', None))
-		except Exception as e:
-			print('Failed to validate Origin header! Reason: %s' % e)
-			return
+		if self.disable_security is False:
+			try:
+				self.validate_client(remote_ip, remote_port, path, ws.request_headers.get('Origin', None))
+			except Exception as e:
+				print('Failed to validate client! Reason: %s' % e)
+				return
 		
 		# Now that the client connection has been validated, we can continue actually initializing the client
 		client = WSNETAgent(ws)
@@ -103,7 +107,8 @@ async def amain(args):
 			listen_port=args.port, 
 			ssl_ctx=ssl_ctx, 
 			secret = args.secret, 
-			disable_origin_check=args.noorigin
+			disable_origin_check=args.noorigin,
+			disable_security=args.disable_security
 		)
 
 		await server.run()
@@ -123,6 +128,7 @@ def main():
 	parser.add_argument('--ssl-ca',  help='CA cert file for client cert validations')
 	parser.add_argument('--secret',  type=str, help='Secret string to protect this proxy from malicious connections')
 	parser.add_argument('--noorigin', action='store_true', help='Disables origin header validation')
+	parser.add_argument('--disable-security', action='store_true', help='Disables all security validations')
 
 
 	args = parser.parse_args()
