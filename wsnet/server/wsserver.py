@@ -86,7 +86,10 @@ class WSNETWSServer:
 		proto = 'ws'
 		if self.ssl_ctx is not None:
 			proto = 'wss'
-		print('Listening on %s://%s:%d/%s/' % (proto, self.listen_ip, self.listen_port, self.secret))
+		if self.secret is None:
+			print('Listening on %s://%s:%d/' % (proto, self.listen_ip, self.listen_port))
+		else:
+			print('Listening on %s://%s:%d/%s/' % (proto, self.listen_ip, self.listen_port, self.secret))
 		await self.wsserver.wait_closed()
 
 
