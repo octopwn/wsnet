@@ -3,13 +3,16 @@ import asyncio
 import os
 import io
 import ssl
-
+import socket
 
 import traceback
 from wsnet.protocol import *
 from asyncio import events
 from asyncio.streams import StreamReader, StreamWriter, StreamReaderProtocol
 from asyncio.transports import Transport
+
+WSNET_PROXY_ADDR_LOOKUP_TABLE = {}
+WSNET_PROXY_ADDR_LOOKUP_TABLE_INV = {}
 
 try:
 	import js
@@ -25,6 +28,7 @@ def patch_asyncio():
 	asyncio.open_connection = open_connection
 	loop = events.get_running_loop()
 	loop.create_connection = create_connection
+	loop.getaddrinfo = getaddrinfo
 
 async def test_streamreader():
 	try:
@@ -48,7 +52,25 @@ async def test_streamreader_ssl(host='google.com', port=443, ssl=True):
 		print('Exception: {}'.format(e))
 		traceback.print_exc()
 
+async def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+	global WSNET_PROXY_ADDR_LOOKUP_TABLE_INV, WSNET_PROXY_ADDR_LOOKUP_TABLE
+	try:
+		host = host.decode()
+	except:
+		pass
+	
+	if host not in WSNET_PROXY_ADDR_LOOKUP_TABLE_INV:
+		addr_mark = os.urandom(4)
+		addr = socket.inet_ntoa(addr_mark)
+		
+		WSNET_PROXY_ADDR_LOOKUP_TABLE[addr] = host
+		WSNET_PROXY_ADDR_LOOKUP_TABLE_INV[host] = addr
+	else:
+		print('WSNET getaddrinfo: Host already in lookup table. Host: {}'.format(host))
 
+	addr = WSNET_PROXY_ADDR_LOOKUP_TABLE_INV[host]
+	print('WSNET getaddrinfo: The callee is trying to resolve the address. Returning dummy address. Host: {}, Ret addr: {}'.format(host, addr))
+	return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (addr, port))]
 
 async def create_connection(protocol_factory, host=None, port=None,
 			*, ssl=None, family=0,
@@ -56,6 +78,12 @@ async def create_connection(protocol_factory, host=None, port=None,
 			local_addr=None, server_hostname=None,
 			ssl_handshake_timeout=None,
 			happy_eyeballs_delay=None, interleave=None):
+	
+	print('WSNET create_connection: The callee is trying to open a connection. Host: {}, Port: {}'.format(host, port))
+	if host in WSNET_PROXY_ADDR_LOOKUP_TABLE:
+		host = WSNET_PROXY_ADDR_LOOKUP_TABLE[host]
+	else:
+		print('WSNET create_connection: Host not found in lookup table!. Host: {}, Port: {}'.format(host, port))
 	
 	if sock is not None:
 		raise NotImplementedError('Socket is not supported')
@@ -92,6 +120,48 @@ async def open_connection(host, port, ssl=None, loop=None, limit=2 ** 16 , **kwd
 	writer = StreamWriter(transport, protocol, reader, loop)
 	return reader, writer
 
+class DummySocket:
+	def __init__(self, host='', ip='127.0.0.1', port=0, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0, fileno=None, closefd=True):
+		self.host = host
+		self.ip = ip
+		self.port = port
+		self.family = family
+		self.type = type
+		self.proto = proto
+		self.fd = fileno
+		self.closefd = closefd
+
+
+	def setblocking(self, flag):
+		print('setblocking', flag)
+
+	def connect(self, addr):
+		print('connect', addr)
+
+	def close(self):
+		print('close')
+		self.fd = -1
+
+	def fileno(self):
+		print('fileno')
+		return self.fd
+
+	def send(self, data):
+		print('send', data)
+
+	def recv(self, bufsize):
+		print('recv', bufsize)
+
+	def sendall(self, data):
+		print('sendall', data)
+
+	def getpeername(self):
+		print('socket getpeername')
+		if self.host in WSNET_PROXY_ADDR_LOOKUP_TABLE:
+			host = WSNET_PROXY_ADDR_LOOKUP_TABLE[host]
+		else:
+			host = self.host
+		return (host, self.port)
 
 
 class WSNETConnection:
@@ -119,12 +189,17 @@ class WSNETConnection:
 	
 		
 		self.read_lock:asyncio.Lock = asyncio.Lock()
-		self.read_pause:asyncio.Task = None
+		self.read_resume:asyncio.Event = asyncio.Event()
 		self.conn_out_task:asyncio.Task = None
 		self.conn_in_task:asyncio.Task = None
 		self.protocol:asyncio.Protocol = None
+		self.socket = DummySocket(self.host, self.host, self.port)
+		self.read_resume.set()
 	
 	async def close(self):
+		if self.socket is not None:
+			self.socket.close()
+		
 		if self.protocol is not None:
 			self.protocol.connection_lost(None)
 		
@@ -135,28 +210,30 @@ class WSNETConnection:
 			self.conn_in_task.cancel()
 		
 
-		
 	async def pause_reading(self):
-		while True:
-			async with self.read_lock:
-				await asyncio.sleep(100)
+		self.read_resume.clear()
+		async with self.read_lock:
+			await self.read_resume.wait()
 
 	def get_extra_info(self, name, default=None):
+		#print('get_extra_info', name, default)
 		if name == 'sslcontext':
 			return self.ssl_ctx
+		elif name == 'socket':
+			return self.socket
 		else:
 			return default
 	
 	async def connection_handler_in(self):
 		try:
-			print('WSNETConnection: connection_handler_in started')
+			#print('WSNETConnection: connection_handler_in started')
 			while not self.disconnected_evt.is_set():
 				async with self.read_lock:
-					print('WSNETConnection: connection_handler_in waiting for data')
+					#print('WSNETConnection: connection_handler_in waiting for data')
 					data_memview = await self.internal_in_q.get()
-					print('got memview')
+					#print('got memview')
 					cmd = CMD.from_bytes(data_memview.to_py())
-					print('WSNETConnection: connection_handler_in got data: %s' % cmd.type)
+					#print('WSNETConnection: connection_handler_in got data: %s' % cmd.type)
 					if cmd.type == CMDType.OK:
 						#print('Remote end terminated the socket')
 						raise Exception('Remote end terminated the socket')
@@ -164,9 +241,9 @@ class WSNETConnection:
 						#print('Proxy sent error during data transmission. Killing the tunnel.')
 						raise Exception('Proxy sent error during data transmission. Killing the tunnel.')
 					#await self.in_q.put((cmd.data, None))
-					print('DATA IN: %s'	% cmd.data)
+					#print('DATA IN: %s'	% cmd.data)
 					self.protocol.data_received(cmd.data)
-			print('WSNETConnection: connection_handler_in stopped')
+			#print('WSNETConnection: connection_handler_in stopped')
 		except Exception as e:
 			traceback.print_exc()
 			return			
@@ -174,11 +251,11 @@ class WSNETConnection:
 			await self.close()
 
 	async def connection_handler_out(self):
-		print('WSNETConnection: connection_handler_out started')
+		#print('WSNETConnection: connection_handler_out started')
 		try:
 			while not self.disconnected_evt.is_set():
 				data = await self.out_q.get()
-				print('Write_in: %s' % data)
+				#print('Write_in: %s' % data)
 				if data is None or data == b'':
 					return
 
@@ -212,12 +289,10 @@ class WSNETConnection:
 		buffer = remaining
 		if len(buffer) > 5:
 			record_len = int.from_bytes(buffer[3:5], byteorder='big')
-			print('record_len+5: %s' % (record_len+5))
 			if len(buffer) >= record_len+5:
-				print('returning buffer')
 				return buffer[:record_len+5], buffer[record_len+5:]
 		try:
-			print('__ssl_recv_one with remaining: %s' % remaining)
+			#print('__ssl_recv_one with remaining: %s' % remaining)
 			
 			while not self.disconnected_evt.is_set():
 				data = await self.internal_in_q.get()
@@ -232,9 +307,9 @@ class WSNETConnection:
 				if len(buffer) > 5:
 					final_buffer = b''
 					record_len = int.from_bytes(buffer[3:5], byteorder='big')
-					print('record_len+5: %s' % (record_len+5))
+					#print('record_len+5: %s' % (record_len+5))
 					if len(buffer) >= record_len + 5:
-						print('returning buffer and rest %s, %s' % (buffer[:record_len+5], buffer[record_len+5:]))
+						#print('returning buffer and rest %s, %s' % (buffer[:record_len+5], buffer[record_len+5:]))
 						final_buffer += buffer[:record_len+5]
 					return final_buffer, buffer[len(final_buffer):]
 						
@@ -244,7 +319,7 @@ class WSNETConnection:
 		
 	async def do_handshake(self):
 		try:
-			print('handshake')
+			#print('handshake')
 			self.tls_in_buff = ssl.MemoryBIO()
 			self.tls_out_buff = ssl.MemoryBIO()
 			self.tls_obj = self.ssl_ctx.wrap_bio(self.tls_in_buff, self.tls_out_buff, server_side=False) # , server_hostname = self.monitor.dst_hostname
@@ -256,11 +331,11 @@ class WSNETConnection:
 				try:
 					self.tls_obj.do_handshake()
 				except ssl.SSLWantReadError:
-					print('DST want %s' % ctr)
+					#print('DST want %s' % ctr)
 					if rest != b'':
-						print('DST rest %s' % len(rest))
+						#print('DST rest %s' % len(rest))
 						server_hello, rest = await self.__ssl_recv_one(rest)
-						print('DST server_hello 2 %s' % len(server_hello))
+						#print('DST server_hello 2 %s' % len(server_hello))
 						if server_hello != b'':
 							self.tls_in_buff.write(server_hello)
 							continue
@@ -268,7 +343,7 @@ class WSNETConnection:
 					while not self.disconnected_evt.is_set():
 						client_hello = self.tls_out_buff.read()
 						if client_hello != b'':
-							print('DST client_hello %s' % len(client_hello))
+							#print('DST client_hello %s' % len(client_hello))
 							cmd = WSNSocketData(self.token, client_hello)
 							js.sendWebSocketData(self.ws_id, cmd.to_bytes())
 						else:
@@ -278,17 +353,17 @@ class WSNETConnection:
 					server_hello, rest = await self.__ssl_recv_one(rest)
 					if server_hello == b'':
 						raise Exception('Server hello is empty')
-					print('DST server_hello %s' % len(server_hello))
-					print('DST server_hello %s' % server_hello)
+					#print('DST server_hello %s' % len(server_hello))
+					#print('DST server_hello %s' % server_hello)
 					self.tls_in_buff.write(server_hello)
 
 					continue
 				except:
 					raise
 				else:
-					print('DST handshake ok %s' % ctr)
+					#print('DST handshake ok %s' % ctr)
 					server_fin = self.tls_out_buff.read()
-					print('DST server_fin %s ' %  server_fin)
+					#print('DST server_fin %s ' %  server_fin)
 					if server_fin != b'':
 						cmd = WSNSocketData(self.token, server_fin)
 						js.sendWebSocketData(self.ws_id, cmd.to_bytes())
@@ -302,14 +377,14 @@ class WSNETConnection:
 	async def connection_handler_in_ssl(self, remaining:bytearray):
 		try:
 			buffer = remaining
-			print('WSNETConnection: SSL connection_handler_in started')
+			#print('WSNETConnection: SSL connection_handler_in started')
 			while not self.disconnected_evt.is_set():
 				async with self.read_lock:
-					print('WSNETConnection: SSL connection_handler_in waiting for data')
+					#print('WSNETConnection: SSL connection_handler_in waiting for data')
 					data_memview = await self.internal_in_q.get()
-					print('got memview')
+					#print('got memview')
 					cmd = CMD.from_bytes(data_memview.to_py())
-					print('WSNETConnection: SSL connection_handler_in got data: %s' % cmd.type)
+					#print('WSNETConnection: SSL connection_handler_in got data: %s' % cmd.type)
 					if cmd.type == CMDType.OK:
 						#print('Remote end terminated the socket')
 						raise Exception('SSL Remote end terminated the socket')
@@ -317,7 +392,7 @@ class WSNETConnection:
 						#print('Proxy sent error during data transmission. Killing the tunnel.')
 						raise Exception('SSL Proxy sent error during data transmission. Killing the tunnel.')
 					#await self.in_q.put((cmd.data, None))
-					print('SSL DATA IN: %s'	% cmd.data)
+					#print('SSL DATA IN: %s'	% cmd.data)
 					buffer += cmd.data
 					if len(buffer) < 5:
 						continue
@@ -334,7 +409,7 @@ class WSNETConnection:
 						except ssl.SSLWantReadError:
 							break
 						self.protocol.data_received(decdata)
-			print('WSNETConnection: connection_handler_in stopped')
+			#print('WSNETConnection: connection_handler_in stopped')
 		except Exception as e:
 			traceback.print_exc()
 			return			
@@ -346,7 +421,7 @@ class WSNETConnection:
 		try:
 			while not self.disconnected_evt.is_set():
 				data = await self.out_q.get()
-				print('SSL Write_in: %s' % data)
+				#print('SSL Write_in: %s' % data)
 				if data is None or data == b'':
 					return
 				
@@ -399,9 +474,9 @@ class WSNETConnection:
 
 			# at this point the proxy has successfully connected to the destination IP and port
 			if self.ssl_ctx is not None:
-				print('WSNETConnection: SSL')
+				#print('WSNETConnection: SSL')
 				if self.ssl_ctx is True:
-					print('WSNETConnection: creating new SSL context')
+					#print('WSNETConnection: creating new SSL context')
 					self.ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 					self.ssl_ctx.check_hostname = False
 					self.ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -410,7 +485,7 @@ class WSNETConnection:
 					#self.ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1  # Set the minimum supported TLS version to 1.0
 					#self.ssl_ctx.maximum_version = ssl.TLSVersion.TLSv1_2  # Set the maximum supported TLS version to 1.2
 
-				print('WSNETConnection: about to do handshake')
+				#print('WSNETConnection: about to do handshake')
 				
 				rest = await self.do_handshake()
 				self.conn_in_task = asyncio.create_task(self.connection_handler_in_ssl(rest))
@@ -434,18 +509,19 @@ class WSNETTransport(Transport):
 		self.write_buffer_size = 65535
 		self.read_buffer_size = 65535
 		self.comms = comms
+		self._write_buffer_limits = (0, 0)
 		self._protocol = None
 		self._isclosing = False
 
 	def get_extra_info(self, name, default=None):
 		"""Get optional transport information."""
-		print('Extrainfo', name, default)
+		#print('Extrainfo', name, default)
 		return self.comms.get_extra_info(name, default)
 		
 
 	def is_closing(self):
 		"""Return True if the transport is closing or closed."""
-		print('is_closing')
+		#print('is_closing')
 		return self._isclosing
 
 	def close(self):
@@ -455,12 +531,13 @@ class WSNETTransport(Transport):
 		protocol's connection_lost() method will (eventually) be
 		called with None as its argument.
 		"""
-		print('close')
+		#print('close')
+		self._isclosing = True
 		x = asyncio.create_task(self.comms.close())
 
 	def set_protocol(self, protocol):
 		"""Set a new protocol."""
-		print('set_protocol', protocol)
+		#print('set_protocol', protocol)
 		self.comms.protocol = protocol
 
 	def get_protocol(self):
@@ -468,26 +545,25 @@ class WSNETTransport(Transport):
 		return self.comms.protocol
 
 	def is_reading(self):
-		print('is_reading')
+		#print('is_reading')
 		"""Return True if the transport is receiving."""
-		return self.comms.read_pause is not None
+		return self.comms.read_resume.is_set()
 
 	def pause_reading(self):
 		"""Pause the receiving end.
 		No data will be passed to the protocol's data_received()
 		method until resume_reading() is called.
 		"""
-		print('pause_reading')
-		self.comms.read_pause = asyncio.create_task(self.comms.pause_reading())
+		#print('pause_reading')
+		x = asyncio.create_task(self.comms.pause_reading())
 
 	def resume_reading(self):
 		"""Resume the receiving end.
 		Data received will once again be passed to the protocol's
 		data_received() method.
 		"""
-		print('resume_reading')
-		self.comms.read_pause.cancel()
-		self.comms.read_pause = None
+		#print('resume_reading')
+		self.comms.read_resume.set()
 	
 	def set_write_buffer_limits(self, high=None, low=None):
 		"""Set the high- and low-water limits for write flow control.
@@ -506,23 +582,23 @@ class WSNETTransport(Transport):
 		reduces opportunities for doing I/O and computation
 		concurrently.
 		"""
-		print('set_write_buffer_limits')
-		raise NotImplementedError
+		#print('set_write_buffer_limits')
+		self._write_buffer_limits = (low, high)
 
 	def get_write_buffer_size(self):
-		print('get_write_buffer_size')
+		#print('get_write_buffer_size')
 		"""Return the current size of the write buffer."""
 		return self.write_buffer_size
 
 	def get_write_buffer_limits(self):
-		print('get_write_buffer_limits')
+		#print('get_write_buffer_limits')
 		"""Get the high and low watermarks for write flow control.
 		Return a tuple (low, high) where low and high are
 		positive number of bytes."""
-		raise NotImplementedError
+		return self._write_buffer_limits
 
 	def write(self, data):
-		print('write', data)
+		#print('write', data)
 		"""Write some data bytes to the transport.
 		This does not block; it buffers the data and arranges for it
 		to be sent out asynchronously.
@@ -530,7 +606,7 @@ class WSNETTransport(Transport):
 		self.comms.out_q.put_nowait(data)
 
 	def writelines(self, list_of_data):
-		print('writelines', list_of_data)
+		#print('writelines', list_of_data)
 		"""Write a list (or any iterable) of data bytes to the transport.
 		The default implementation concatenates the arguments and
 		calls write() on the result.
@@ -539,7 +615,7 @@ class WSNETTransport(Transport):
 		self.write(data)
 
 	def write_eof(self):
-		print('write_eof')
+		#print('write_eof')
 		"""Close the write end after flushing buffered data.
 		(This is like typing ^D into a UNIX program reading from stdin.)
 		Data may still be received.
@@ -547,18 +623,18 @@ class WSNETTransport(Transport):
 		self.comms.out_q.put_nowait(None)
 
 	def can_write_eof(self):
-		print('can_write_eof')
+		#print('can_write_eof')
 		"""Return True if this transport supports write_eof(), False if not."""
 		return True
 
 	def abort(self):
-		print('abort')
+		#print('abort')
 		"""Close the transport immediately.
 		Buffered data will be lost.  No more data will be received.
 		The protocol's connection_lost() method will (eventually) be
 		called with None as its argument.
 		"""
-		self.conn.close()
+		self.close()
 	
 async def main():
 	from wsnet.pyodide.test_js import js, to_js, create_proxy

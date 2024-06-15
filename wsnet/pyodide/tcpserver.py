@@ -3,8 +3,7 @@ from inspect import trace
 import os
 import traceback
 import typing
-
-import websockets
+import io
 from wsnet.protocol import *
 
 # This object is responsible to create a binding server fusing the WSNET protocol
@@ -23,47 +22,40 @@ class WSNetworkServerTCPReader:
 		self.in_queue = in_queue
 		self.closed_event = closed_event
 		self.buffer = b''
-		self.data_in_evt = asyncio.Event()
-		self.err = None
 		self.bufferlock = asyncio.Lock()
 
-	async def __handle_in(self):
-		while True:
-			res, self.err = await self.in_queue.get()
-			if self.err is not None:
-				if res is not None and res != b'':
-					self.buffer += res.data
-					self.data_in_evt.set()
-				self.closed_event.set()
-				return
+	async def __read_one(self):
+		# will perform one read from the incoming queue
+		datacmd, err = await self.in_queue.get()
+		#print(err)
+		#print(datacmd.data)
+		if datacmd is not None and datacmd.data != b'':
+			self.buffer += datacmd.data
 
-			self.buffer += res
-			self.data_in_evt.set()
+		if err is not None:
 			self.closed_event.set()
-
-	async def run(self):
-		self.handle_task = asyncio.create_task(self.__handle_in())
-		await asyncio.sleep(0) #making sure prev line fired
+		return len(datacmd.data), err
 
 	async def read(self, n = -1):
 		try:
-			#print('read')
+			#print('server connection: read %s' % n)
 			if self.closed_event.is_set():
 				return b''
 
 			async with self.bufferlock:
 				if n == -1:
 					if len(self.buffer) == 0:
-						self.data_in_evt.clear()
-						self.data_in_evt.wait()
-
-
+						_, err = await self.__read_one()
+						if err is not None:
+							raise err
+					
 					temp = self.buffer
 					self.buffer = b''
 				else:
 					if len(self.buffer) == 0:
-						self.data_in_evt.clear()
-						self.data_in_evt.wait()
+						_, err = await self.__read_one()
+						if err is not None:
+							raise err
 					
 					temp = self.buffer[:n]
 					self.buffer = self.buffer[n:]
@@ -78,6 +70,7 @@ class WSNetworkServerTCPReader:
 
 	async def readexactly(self, n):
 		try:
+			#print('server connection: readexactly %s' % n)
 			if self.closed_event.is_set():
 				raise Exception('Pipe broken!')
 
@@ -86,8 +79,9 @@ class WSNetworkServerTCPReader:
 
 			async with self.bufferlock:
 				while len(self.buffer) < n:
-					self.data_in_evt.clear()
-					self.data_in_evt.wait()
+					_, err = await self.__read_one()
+					if err is not None:
+						raise err
 				
 				#print('self.buffer %s' % self.buffer)
 				temp = self.buffer[:n]
@@ -102,13 +96,15 @@ class WSNetworkServerTCPReader:
 
 	async def readuntil(self, separator = b'\n'):
 		try:
+			#print('server connection: readuntil %s' % separator)
 			if self.closed_event.is_set():
 				raise Exception('Pipe broken!')
 
 			async with self.bufferlock:
 				while self.buffer.find(separator) == -1:
-					self.data_in_evt.clear()
-					self.data_in_evt.wait()
+					_, err = await self.__read_one()
+					if err is not None:
+						raise err
 				
 				end = self.buffer.find(separator)+len(separator)
 				temp = self.buffer[:end]
@@ -133,14 +129,31 @@ class WSNetworkServerTCPWriter:
 		self.token = token
 		self.connectiontoken = connectiontoken
 		self.closed_event = closed_event
-		self.__write_queue = asyncio.Queue()
 		self.handle_task = None
+		self.__write_queue = asyncio.Queue()
 
 	async def __writer(self):
-		while not self.closed_event.is_set():
-			data = await self.__write_queue.get()
-			data = WSNServerSocketData(self.token, self.connectiontoken, data)
-			await self.ws.send(data.to_bytes())
+		try:
+			while not self.closed_event.is_set():
+				data = await self.__write_queue.get()
+				#print('sending data')
+				#print(data)
+				if len(data) < 286295:
+					cmd = WSNServerSocketData(self.token, self.connectiontoken, data)
+					js.sendWebSocketData(self.ws, cmd.to_bytes())
+				else:
+					# need to chunk the data because WS only accepts max 286295 bytes in one message
+					data = io.BytesIO(data)
+					while True:
+						chunk = data.read(286200)
+						if chunk == b'':
+							break
+						cmd = WSNServerSocketData(self.token, self.connectiontoken, chunk)
+						js.sendWebSocketData(self.ws, cmd.to_bytes())
+		except Exception as e:
+			traceback.print_exc()
+			self.closed_event.set()
+			return None, e
 
 	def write(self, data):
 		if self.closed_event.is_set() is True:
@@ -179,15 +192,22 @@ class WSNetworkServerTCPWriter:
 	async def run(self):
 		self.handle_task = asyncio.create_task(self.__writer())
 		await asyncio.sleep(0)
+		return None, None
 
 class WSNetworkServerTCPServer:
 	def __init__(self, ws, token, handle_client_cb, closed_evt:asyncio.Event):
 		self.ws = ws
 		self.token = token
 		self.closed_evt = closed_evt
-		self.sockets = []
 		self.handle_client_cb = handle_client_cb
 		self.connections = {}
+		self.writers = {}
+	
+	async def terminate(self):
+		for connectiontoken in self.writers:
+			await self.writers[connectiontoken].write(b'')
+		for connectiontoken in self.connections:
+			await self.connections[connectiontoken].put((None, Exception('Server is terminating!')))
 	
 	async def serve_forever(self):
 		try:
@@ -204,17 +224,16 @@ class WSNetworkServerTCPServer:
 	async def handle_new_connection(self, cmd:WSNServerSocketData):
 		try:
 			# new client connected!
+			print('New client connected!')
 			in_q = asyncio.Queue()
 			closed_event = asyncio.Event()
 			reader = WSNetworkServerTCPReader(in_q, closed_event)
-			_, err = await reader.run()
-			if err is not None:
-				raise err
 			writer = WSNetworkServerTCPWriter(self.ws, self.token, cmd.connectiontoken, closed_event)
 			_, err = await writer.run()
 			if err is not None:
 				raise err
 			self.connections[cmd.connectiontoken] = in_q
+			self.writers[cmd.connectiontoken] = writer
 			x =  asyncio.create_task(self.handle_client_cb(reader, writer))
 		except Exception as e:
 			traceback.print_exc()
@@ -223,7 +242,11 @@ class WSNetworkServerTCPServer:
 	async def handle_new_msg(self, cmd:WSNServerSocketData):
 		if cmd.connectiontoken not in self.connections:
 			await self.handle_new_connection(cmd)
+			if cmd.data != b'':
+				await self.connections[cmd.connectiontoken].put((cmd, None))
 		else:
+			#print('Dispatching data for existing connection')
+			#print(cmd)
 			await self.connections[cmd.connectiontoken].put((cmd, None))
 
 
@@ -249,6 +272,8 @@ class WSNetworkTCPServer:
 		self.internal_in_q = None
 
 	async def terminate(self):
+		if self.server is not None:
+			await self.server.terminate()
 		if self.in_task is not None:
 			self.in_task.cancel()
 		if self.ws is not None:
@@ -268,7 +293,7 @@ class WSNetworkTCPServer:
 						print('Proxy sent error')
 						raise Exception('Proxy sent error during data transmission. Killing the tunnel.')
 					elif cmd.type == CMDType.SDSRV:
-						self.server.handle_new_msg(cmd)
+						await self.server.handle_new_msg(cmd)
 				except asyncio.CancelledError:
 					return
 				except Exception as e:

@@ -72,6 +72,19 @@ from wsnet.protocol.common.listagents import WSNListAgents
 from wsnet.protocol.common.listagentsreply import WSNListAgentsReply
 from wsnet.protocol.connection.serversocketdata import WSNServerSocketData
 from wsnet.protocol.connection.wrapssl import WSNSocketWrapSSL
+from wsnet.protocol.fileop.dirls import WSNDirLS
+from wsnet.protocol.fileop.dirmk import WSNDirMK
+from wsnet.protocol.fileop.dirrm import WSNDirRM
+from wsnet.protocol.fileop.dircopy import WSNDirCopy
+from wsnet.protocol.fileop.dirmove import WSNDirMove
+from wsnet.protocol.fileop.fileread import WSNFileRead
+from wsnet.protocol.fileop.filecopy import WSNFileCopy
+from wsnet.protocol.fileop.filemove import WSNFileMove
+from wsnet.protocol.fileop.filedata import WSNFileData
+from wsnet.protocol.fileop.fileentry import WSNFileEntry
+from wsnet.protocol.fileop.fileopen import WSNFileOpen
+from wsnet.protocol.fileop.filerm import WSNFileRM
+from wsnet.protocol.fileop.filestat import WSNFileStat
 
 
 
@@ -103,7 +116,20 @@ __all__ = [
 	'WSNListAgents',
 	'WSNListAgentsReply',
 	'WSNServerSocketData',
-	'WSNSocketWrapSSL'
+	'WSNSocketWrapSSL',
+	'WSNDirLS',
+	'WSNDirMK',
+	'WSNDirRM',
+	'WSNDirCopy',
+	'WSNDirMove',
+	'WSNFileRead',
+	'WSNFileCopy',
+	'WSNFileMove',
+	'WSNFileData',
+	'WSNFileEntry',
+	'WSNFileOpen',
+	'WSNFileRM',
+	'WSNFileStat',
 
 ]
 
@@ -137,4 +163,17 @@ type2cmd = {
 	CMDType.AGENTINFO : WSNListAgentsReply,
 	CMDType.SDSRV : WSNServerSocketData,
 	CMDType.WRAPSSL : WSNSocketWrapSSL,
+	CMDType.DIRLS : WSNDirLS,
+	CMDType.DIRMK : WSNDirMK,
+	CMDType.DIRRM : WSNDirRM,
+	CMDType.DIRCOPY : WSNDirCopy,
+	CMDType.DIRMOVE : WSNDirMove,
+	CMDType.FILEREAD : WSNFileRead,
+	CMDType.FILECOPY : WSNFileCopy,
+	CMDType.FILEMOVE : WSNFileMove,
+	CMDType.FILEDATA : WSNFileData,
+	CMDType.FILEENTRY : WSNFileEntry,
+	CMDType.FILEOPEN : WSNFileOpen,
+	CMDType.FILERM : WSNFileRM,
+	CMDType.FILESTAT : WSNFileStat,
 }

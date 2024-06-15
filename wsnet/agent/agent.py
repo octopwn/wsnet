@@ -6,6 +6,7 @@ import struct
 import ipaddress
 import typing
 import traceback
+import shutil
 
 from wsnet import logger
 from wsnet.protocol import *
@@ -36,25 +37,83 @@ class UDPServerProtocol:
 	def connection_lost(self, exc):
 		self.in_queue.put_nowait((None, exc))
 
+class TCPServerConnection:
+	def __init__(self, agent, token, ip, port):
+		self.agent = agent
+		self.token = token
+		self.ip = ip
+		self.port = port
+	
+	async def handle_server_client_write(self, connectiontoken, writer, disconnected_evt):
+		try:
+			while not disconnected_evt.is_set():
+				data = await self.agent.server_queues[self.token][connectiontoken].get()
+				print('out data: %s' % data)
+				cmd = typing.cast(WSNServerSocketData, data)
+				if cmd.data == b'':
+					return
+				writer.write(cmd.data)
+				await writer.drain()
+		except Exception as e:
+			print(e)
+			logger.exception('handle_server_client_write')
+		finally:
+			print('handle_server_client_write done!')
+			disconnected_evt.set()
+	
+	async def handle_server_client(self, reader, writer):
+		writer_task = None
+		connectiontoken = self.agent.get_connection_id()
+		disconnected_evt = asyncio.Event()
+		try:
+			self.agent.server_queues[self.token][connectiontoken] = asyncio.Queue()
+			writer_task = asyncio.create_task(self.handle_server_client_write(connectiontoken, writer, disconnected_evt))
+			while not disconnected_evt.is_set():
+				data = await reader.read(65536)
+				reply = WSNServerSocketData(self.token, connectiontoken, data)
+				print(reply.to_bytes())
+				await self.agent.send_data(reply.to_bytes())
+				if data == b'':
+					return
+
+		except Exception as e:
+			print(e)
+			logger.exception('handle_server_client')
+		finally:
+			print('handle_server_client done!')
+			disconnected_evt.set()
+			if writer_task is not None:
+				writer_task.cancel()
+			del self.agent.server_queues[self.token][connectiontoken]
+
+
 class WSNETAgent:
 	def __init__(self, transport:GenericTransport, send_full_exception:bool = True):
 		self.transport = transport
 		self.send_full_exception = send_full_exception
 
 		self.connections = {} #connection_id -> smbmachine
-		self.__conn_id = 0
+		self.__conn_id = 10
 		self.__process_queues = {} #token -> in_queue
-		self.__server_queues = {} #token -> {connectiontoken -> in_queue}
+		self.server_queues = {} #token -> {connectiontoken -> in_queue}
+		self.file_queues = {}
+		self.__servers = {} #token -> server
 		self.__running_tasks = {} #token -> task
 
-	def __get_connection_id(self):
+	def get_connection_id(self):
 		t = self.__conn_id
 		self.__conn_id += 1
-		return str(t)
+		return str(t).ljust(16, 'L').encode()
 
 	async def terminate(self):
-		#not a command, only called when the connection is lost so the smb clients can be shut down safely
-		pass
+		for token in self.__running_tasks:
+			self.__running_tasks[token].cancel()
+		self.__running_tasks = {}
+
+		for token in self.__servers:
+			self.__servers[token].cancel()
+		self.__servers = {}
+
 	
 	async def send_data(self, data:bytes):
 		await self.transport.send(data)
@@ -77,7 +136,7 @@ class WSNETAgent:
 	async def handle_udp_writer(self, token, connectiontoken, transport, disconnected_evt):
 		try:
 			while not disconnected_evt.is_set():
-				data = await self.__server_queues[token][connectiontoken].get()
+				data = await self.server_queues[token][connectiontoken].get()
 				cmd = typing.cast(WSNServerSocketData, data)
 				if cmd.data == b'':
 					return
@@ -91,7 +150,7 @@ class WSNETAgent:
 	async def handle_server_client_write(self, token, connectiontoken, writer, disconnected_evt):
 		try:
 			while not disconnected_evt.is_set():
-				data = await self.__server_queues[token][connectiontoken].get()
+				data = await self.server_queues[token][connectiontoken].get()
 				cmd = typing.cast(WSNServerSocketData, data)
 				if cmd.data == b'':
 					return
@@ -100,13 +159,14 @@ class WSNETAgent:
 		except Exception as e:
 			logger.exception('handle_server_client_write')
 		finally:
+			print('handle_server_client_write done!')
 			disconnected_evt.set()
 
 	async def handle_server_client(self, token, reader, writer, disconnected_evt):
 		writer_task = None
 		try:
-			connectiontoken = self.__get_connection_id()
-			self.__server_queues[token][connectiontoken] = asyncio.Queue()
+			connectiontoken = self.get_connection_id()
+			self.server_queues[token][connectiontoken] = asyncio.Queue()
 			writer_task = await asyncio.create_task(self.handle_server_client_write(token, connectiontoken, writer, disconnected_evt))
 			while not disconnected_evt.is_set():
 				data = await reader.read(65536)
@@ -118,10 +178,11 @@ class WSNETAgent:
 		except Exception as e:
 			logger.exception('handle_server_client')
 		finally:
+			print('handle_server_client done!')
 			disconnected_evt.set()
 			if writer_task is not None:
 				writer_task.cancel()
-			del self.__server_queues[token][connectiontoken]
+			del self.server_queues[token][connectiontoken]
 		
 
 	async def socket_connect(self, cmd:WSNConnect):
@@ -155,8 +216,8 @@ class WSNETAgent:
 					protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
 					servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory)
 					x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-					self.__server_queues[cmd.token] = {}
-					self.__server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
+					self.server_queues[cmd.token] = {}
+					self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
 					await self.send_continue(cmd)
 					while not disconnected_evt.is_set():
 						x = await in_queue.get()
@@ -170,13 +231,13 @@ class WSNETAgent:
 				if cmd.protocol == 'TCP':
 					if cmd.bindtype == 1:
 						#normal bind
-						self.__server_queues[cmd.token] = {}
+						connection = TCPServerConnection(self, cmd.token, cmd.ip, cmd.port)
+						self.server_queues[cmd.token] = {}
 						logger.debug('Client binding to %s:%s' % (cmd.ip, cmd.port))
-						disconnected_evt = asyncio.Event()
-						server = await asyncio.start_server(lambda r, w: self.handle_server_client(cmd.token, r, w, disconnected_evt), cmd.ip, int(cmd.port))
-						async with server:
-							await self.send_continue(cmd)
-							await server.serve_forever()
+						
+						server = await asyncio.start_server(connection.handle_server_client, host=str(cmd.ip), port=int(cmd.port))
+						await self.send_continue(cmd)
+						self.__servers[cmd.token] = asyncio.create_task(server.serve_forever())
 					else:
 						await self.send_err(cmd, 'Selected bindtype not implemented for TCP')
 				else:
@@ -188,8 +249,8 @@ class WSNETAgent:
 						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
 						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory)
 						x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-						self.__server_queues[cmd.token] = {}
-						self.__server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
+						self.server_queues[cmd.token] = {}
+						self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
 						await self.send_continue(cmd)
 						while not disconnected_evt.is_set():
 							x = await in_queue.get()
@@ -215,8 +276,8 @@ class WSNETAgent:
 						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
 						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory, sock=sock)
 						x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-						self.__server_queues[cmd.token] = {}
-						self.__server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
+						self.server_queues[cmd.token] = {}
+						self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
 						await self.send_continue(cmd)
 						while not disconnected_evt.is_set():
 							x = await in_queue.get()
@@ -238,8 +299,8 @@ class WSNETAgent:
 						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
 						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory, sock=sock)
 						x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-						self.__server_queues[cmd.token] = {}
-						self.__server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
+						self.server_queues[cmd.token] = {}
+						self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
 						await self.send_continue(cmd)
 						while not disconnected_evt.is_set():
 							x = await in_queue.get()
@@ -265,8 +326,8 @@ class WSNETAgent:
 						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
 						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory, sock=sock)
 						x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-						self.__server_queues[cmd.token] = {}
-						self.__server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
+						self.server_queues[cmd.token] = {}
+						self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
 						await self.send_continue(cmd)
 						while not disconnected_evt.is_set():
 							x = await in_queue.get()
@@ -306,6 +367,110 @@ class WSNETAgent:
 			writer.close()
 			del self.__process_queues[token]
 
+	async def process_fileop(self, cmd:CMD):
+		try:
+			if cmd.type == CMDType.DIRRM:
+				cmd = typing.cast(WSNDirRM, cmd)
+				shutil.rmtree(cmd.path)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.DIRMK:
+				cmd = typing.cast(WSNDirMK, cmd)
+				os.makedirs(cmd.path)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.DIRCOPY:
+				cmd = typing.cast(WSNDirCopy, cmd)
+				shutil.copytree(cmd.srcpath, cmd.dstpath)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.DIRMOVE:
+				cmd = typing.cast(WSNDirMove, cmd)
+				shutil.move(cmd.srcpath, cmd.dstpath)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.DIRLS:
+				for root, dirs, files in os.walk(cmd.path):
+					if root != cmd.path:
+						break
+					for file in files:
+						fullepath = os.path.join(root, file)
+						try:
+							stat = os.stat(fullepath)
+							size = stat.st_size
+							atime = stat.st_atime_ns
+							mtime = stat.st_mtime_ns
+							ctime = stat.st_ctime_ns
+						except:
+							size = 0
+							atime = 0
+							mtime = 0
+							ctime = 0
+						fe = WSNFileEntry(cmd.token, root, file, False, size, atime, mtime, ctime)
+						await self.send_data(fe.to_bytes())
+					for dir in dirs:
+						fullepath = os.path.join(root, dir)
+						try:
+							stat = os.stat(fullepath)
+							size = 0
+							atime = stat.st_atime_ns
+							mtime = stat.st_mtime_ns
+							ctime = stat.st_ctime_ns
+						except:
+							size = 0
+							atime = 0
+							mtime = 0
+							ctime = 0
+						fe = WSNFileEntry(cmd.token, root, dir, True, size, atime, mtime, ctime)
+						await self.send_data(fe.to_bytes())
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.FILECOPY:
+				cmd = typing.cast(WSNFileCopy, cmd)
+				shutil.copy(cmd.srcpath, cmd.dstpath)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.FILEMOVE:
+				cmd = typing.cast(WSNFileMove, cmd)
+				shutil.move(cmd.srcpath, cmd.dstpath)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.FILERM:
+				cmd = typing.cast(WSNFileRM, cmd)
+				os.remove(cmd.path)
+				await self.send_ok(cmd)
+			elif cmd.type == CMDType.FILEOPEN:
+				cmd = typing.cast(WSNFileOpen, cmd)
+				if cmd.mode == 'rb' or cmd.mode == 'r' or cmd.mode == 'wb' or cmd.mode == 'w':
+					if 'r' in cmd.mode:
+						f = open(cmd.path, 'rb')
+					else:
+						f = open(cmd.path, 'wb')
+					self.file_queues[cmd.token] = f
+					await self.send_continue(cmd)
+				else:
+					await self.send_err(cmd, 'Mode not supported', '')
+			elif cmd.type == CMDType.FILEREAD:
+				cmd = typing.cast(WSNFileRead, cmd)
+				f = self.file_queues[cmd.token]
+				f.seek(cmd.offset, 0)
+				data = f.read(cmd.size)
+				reply = WSNFileData(cmd.token, data, offset = f.tell() - len(data))
+				await self.send_data(reply.to_bytes())
+			elif cmd.type == CMDType.FILEDATA:
+				cmd = typing.cast(WSNFileData, cmd)
+				f = self.file_queues[cmd.token]
+				f.seek(cmd.offset, 0)
+				f.write(cmd.data)
+				await self.send_continue(cmd)
+			elif cmd.type == CMDType.FILESTAT:
+				cmd = typing.cast(WSNFileStat, cmd)
+				f = self.file_queues[cmd.token]
+				stat = os.fstat(f.fileno())
+				reply = WSNFileEntry(cmd.token, '','', False, stat.st_size, stat.st_atime_ns, stat.st_mtime_ns, stat.st_ctime_ns)
+				await self.send_data(reply.to_bytes())
+			else:
+				await self.send_err(cmd, 'File operation %s not implemented' % cmd.type.value, '')
+
+
+
+		except:
+			traceback.print_exc()
+			await self.send_err(cmd, 'File operation failed %s' % cmd.type, traceback.format_exc())
+
 	async def process_incoming(self, data_raw:bytes):
 		try:
 			try:
@@ -313,16 +478,21 @@ class WSNETAgent:
 			except Exception as e:
 				logger.exception('CMD raw parsing failed! %s' % repr(data_raw))
 				return True, None
-					
+			
 			if cmd.token in self.__process_queues:
 				await self.__process_queues[cmd.token].put(cmd)
 				return True, None
+			
+			if cmd.token in self.file_queues and cmd.type == CMDType.OK:
+				f = self.file_queues[cmd.token]
+				f.close()
+				del self.file_queues[cmd.token]
+				return True, None
 					
 			if cmd.type == CMDType.SDSRV:
+				#print('Server data incoming! %s' % cmd)
 				cmd = typing.cast(WSNServerSocketData, cmd)
-				if cmd.token in self.__server_queues:
-					if cmd.connectiontoken in self.__server_queues:
-						await self.__server_queues[cmd.connectiontoken].put(cmd)
+				await self.server_queues[cmd.token][cmd.connectiontoken].put(cmd)
 					
 			if cmd.type == CMDType.CONNECT: 
 				self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))
@@ -358,6 +528,8 @@ class WSNETAgent:
 					await self.send_ok(cmd)
 				except Exception as e:
 					await self.send_err(cmd, str(e), e)
+			elif cmd.type.value >= 300 and cmd.type.value < 320:
+				await self.process_fileop(cmd)
 			return True, None
 		except Exception as e:
 			logger.exception('handle_incoming')

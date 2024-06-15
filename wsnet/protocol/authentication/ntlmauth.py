@@ -39,5 +39,5 @@ class WSNNTLMAuth(CMD):
 		writeStr(buff, self.credusage)
 		writeStr(buff, self.ctxattr)
 		writeStr(buff, self.targetname)
-		buff.seek(0,0)		
+		buff.seek(0,0)
 		return buff.read()

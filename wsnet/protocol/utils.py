@@ -10,12 +10,12 @@ def writeBytes(buff, data):
 	buff.write(dlen)
 	buff.write(data)
 
-def readStr(buff, encoding='ascii'):
+def readStr(buff, encoding='utf-8'):
 	strlen = int.from_bytes(buff.read(4), byteorder='big', signed = False)
 	data = buff.read(strlen).decode(encoding)
 	return data
 
-def writeStr(buff, data, encoding='ascii'):
+def writeStr(buff, data, encoding='utf-8'):
 	if isinstance(data, str) is False:
 		data = str(data)
 	data = data.encode(encoding)

@@ -17,13 +17,14 @@ class WSNServerSocketData(CMD):
 	
 	@staticmethod
 	def from_bytes(data):
-		return WSNServerSocketData.from_buffer(io.BytesIO(data))
+		return WSNServerSocketData.from_buffer(io.BytesIO(data)) 
 	
 	@staticmethod
 	def from_buffer(buff):
 		token = buff.read(16)
 		connectiontoken = buff.read(16)
 		ipver = buff.read(1)
+		clientip = ''
 		if ipver == b'\x04':
 			clientip = str(ipaddress.ip_address(buff.read(4)))
 		elif ipver == b'\x06':
@@ -31,6 +32,8 @@ class WSNServerSocketData(CMD):
 		elif ipver == b'\xFF':
 			iplen = int.from_bytes(buff.read(4), byteorder='big', signed=False)
 			clientip = buff.read(iplen).decode()
+		else:
+			raise Exception('Invalid IP version %s' % ipver)
 		clientport = int.from_bytes(buff.read(2), byteorder='big', signed=False)
 		data = buff.read(-1)
 		return WSNServerSocketData(token, connectiontoken, data, clientip=clientip, clientport=clientport)
@@ -49,7 +52,8 @@ class WSNServerSocketData(CMD):
 		try:
 			clientip = ipaddress.ip_address(self.clientip)
 		except:
-			t += b'\xFF' + len(self.clientip).to_bytes(4, byteorder='big', signed = False) + self.ip.encode()
+			tip = self.clientip.encode()
+			t += b'\xFF' + len(tip).to_bytes(4, byteorder='big', signed = False) + tip
 		else:
 			if clientip.version == 4:
 				t += b'\x04' + clientip.packed
