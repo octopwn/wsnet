@@ -32,13 +32,16 @@ jobs:
         pyinstaller --onefile wsnet/server/wsserver.py
       shell: bash
 
+    - name: Rename the executable
+      run: |
+        mv dist/wsserver.exe dist/wsserver_windows.exe
+
     - name: Upload executable to release
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/wsserver.exe
-        asset_name: wsnet_windows.exe
-        asset_content_type: application/octet-stream
+        files: dist/wsserver_windows.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
     runs-on: ubuntu-latest
@@ -66,13 +69,16 @@ jobs:
         pyinstaller --onefile wsnet/server/wsserver.py
       shell: bash
 
+    - name: Rename the executable
+      run: |
+        mv dist/wsserver dist/wsserver_linux
+
     - name: Upload executable to release
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/wsserver
-        asset_name: wsnet_linux
-        asset_content_type: application/octet-stream
+        files: dist/wsserver_linux
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     runs-on: ${{ matrix.os }}
@@ -102,20 +108,28 @@ jobs:
         pyinstaller --onefile wsnet/server/wsserver.py
       shell: bash
 
+    - name: Rename the executable (macOS Intel)
+      if: matrix.architecture == 'x86_64'
+      run: |
+        mv dist/wsserver dist/wsserver_macos_intel
+
+    - name: Rename the executable (macOS Apple Silicon)
+      if: matrix.architecture == 'arm64'
+      run: |
+        mv dist/wsserver dist/wsserver_macos_arm64
+
     - name: Upload executable to release (macOS Intel)
       if: matrix.architecture == 'x86_64'
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/wsserver
-        asset_name: wsnet_macos_intel
-        asset_content_type: application/octet-stream
+        files: dist/wsserver_macos_intel
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload executable to release (macOS Apple Silicon)
       if: matrix.architecture == 'arm64'
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/wsserver
-        asset_name: wsnet_macos_arm64
-        asset_content_type: application/octet-stream
+        files: dist/wsserver_macos_arm64
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
