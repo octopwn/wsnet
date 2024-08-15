@@ -15,6 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.11']
+        architecture: [x86_64, arm64]
+      exclude:
+        - os: windows-latest
+          architecture: arm64
 
     steps:
     - name: Checkout code
@@ -39,19 +43,26 @@ jobs:
       if: matrix.os == 'windows-latest'
       uses: actions/upload-artifact@v3
       with:
-        name: executable-windows
+        name: wsnet_windows
         path: dist/wsserver.exe
 
-    - name: Archive the executable (macOS)
-      if: matrix.os == 'macos-latest'
+    - name: Archive the executable (macOS Intel)
+      if: matrix.os == 'macos-latest' && matrix.architecture == 'x86_64'
       uses: actions/upload-artifact@v3
       with:
-        name: executable-macos
+        name: wsnet_macos_intel
+        path: dist/wsserver
+
+    - name: Archive the executable (macOS Apple Silicon)
+      if: matrix.os == 'macos-latest' && matrix.architecture == 'arm64'
+      uses: actions/upload-artifact@v3
+      with:
+        name: wsnet_macos_arm64
         path: dist/wsserver
 
     - name: Archive the executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v3
       with:
-        name: executable-linux
+        name: wsnet_linux
         path: dist/wsserver
