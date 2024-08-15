@@ -1,0 +1,121 @@
+name: Build Executables
+
+on:
+  release:
+    types:
+      - created
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install .
+
+    - name: Compile to executable
+      run: |
+        pyinstaller --onefile wsnet/server/wsserver.py
+      shell: bash
+
+    - name: Upload executable to release
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/wsserver.exe
+        asset_name: wsnet_windows.exe
+        asset_content_type: application/octet-stream
+
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install .
+
+    - name: Compile to executable
+      run: |
+        pyinstaller --onefile wsnet/server/wsserver.py
+      shell: bash
+
+    - name: Upload executable to release
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/wsserver
+        asset_name: wsnet_linux
+        asset_content_type: application/octet-stream
+
+  build-macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest]
+        python-version: ['3.11']
+        architecture: [x86_64, arm64]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install .
+
+    - name: Compile to executable
+      run: |
+        pyinstaller --onefile wsnet/server/wsserver.py
+      shell: bash
+
+    - name: Upload executable to release (macOS Intel)
+      if: matrix.architecture == 'x86_64'
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/wsserver
+        asset_name: wsnet_macos_intel
+        asset_content_type: application/octet-stream
+
+    - name: Upload executable to release (macOS Apple Silicon)
+      if: matrix.architecture == 'arm64'
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/wsserver
+        asset_name: wsnet_macos_arm64
+        asset_content_type: application/octet-stream
