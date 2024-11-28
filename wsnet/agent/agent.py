@@ -493,6 +493,25 @@ class WSNETAgent:
 				#print('Server data incoming! %s' % cmd)
 				cmd = typing.cast(WSNServerSocketData, cmd)
 				await self.server_queues[cmd.token][cmd.connectiontoken].put(cmd)
+
+			elif cmd.type == CMDType.RESOLV:
+				cmd = typing.cast(WSNResolv, cmd)
+				res = []
+				for ip_or_hostname in cmd.ip_or_hostnames:
+					try:
+						try:
+							ipaddress.ip_address(ip_or_hostname)
+							res.append(socket.gethostbyaddr(ip_or_hostname)[0])
+							continue
+						except:
+							pass
+
+						ip = socket.gethostbyname(ip_or_hostname)
+						res.append(ip)
+					except Exception as e:
+						res.append('')
+				reply = WSNResolv(cmd.token, res)
+				await self.send_data(reply.to_bytes())
 					
 			if cmd.type == CMDType.CONNECT: 
 				self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))

@@ -124,10 +124,12 @@ class WSNetworkServerTCPReader:
 		return self.closed_event.is_set() and len(self.buffer) == 0
 
 class WSNetworkServerTCPWriter:
-	def __init__(self, ws, token, connectiontoken, closed_event:asyncio.Event):
+	def __init__(self, ws, token, initial_cmd, closed_event:asyncio.Event):
 		self.ws = ws
 		self.token = token
-		self.connectiontoken = connectiontoken
+		self.peer_ip = initial_cmd.clientip
+		self.peer_port = initial_cmd.clientport
+		self.connectiontoken = initial_cmd.connectiontoken
 		self.closed_event = closed_event
 		self.handle_task = None
 		self.__write_queue = asyncio.Queue()
@@ -187,6 +189,8 @@ class WSNetworkServerTCPWriter:
 		return
 
 	def get_extra_info(self, name, default = None):
+		if name == 'peername':
+			return (self.peer_ip, self.peer_port)
 		return default
 
 	async def run(self):
@@ -228,7 +232,7 @@ class WSNetworkServerTCPServer:
 			in_q = asyncio.Queue()
 			closed_event = asyncio.Event()
 			reader = WSNetworkServerTCPReader(in_q, closed_event)
-			writer = WSNetworkServerTCPWriter(self.ws, self.token, cmd.connectiontoken, closed_event)
+			writer = WSNetworkServerTCPWriter(self.ws, self.token, cmd, closed_event)
 			_, err = await writer.run()
 			if err is not None:
 				raise err

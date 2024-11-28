@@ -29,6 +29,7 @@ class CMDType(enum.Enum):
 
 	SDSRV = 200
 	WRAPSSL = 201
+	RESOLV = 202
 
 	# File operations
 	DIRLS = 300

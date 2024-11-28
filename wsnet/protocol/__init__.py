@@ -85,6 +85,7 @@ from wsnet.protocol.fileop.fileentry import WSNFileEntry
 from wsnet.protocol.fileop.fileopen import WSNFileOpen
 from wsnet.protocol.fileop.filerm import WSNFileRM
 from wsnet.protocol.fileop.filestat import WSNFileStat
+from wsnet.protocol.connection.resolv import WSNResolv
 
 
 
@@ -130,6 +131,7 @@ __all__ = [
 	'WSNFileOpen',
 	'WSNFileRM',
 	'WSNFileStat',
+	'WSNResolv',
 
 ]
 
@@ -176,4 +178,5 @@ type2cmd = {
 	CMDType.FILEOPEN : WSNFileOpen,
 	CMDType.FILERM : WSNFileRM,
 	CMDType.FILESTAT : WSNFileStat,
+	CMDType.RESOLV : WSNResolv,
 }
