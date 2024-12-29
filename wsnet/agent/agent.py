@@ -210,22 +210,29 @@ class WSNETAgent:
 					return
 				else:
 					# not tested!!!!
-					in_queue = asyncio.Queue()
-					writer_queue = asyncio.Queue()
-					disconnected_evt = asyncio.Event()
-					protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
-					servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory)
-					x = asyncio.create_task(self.handle_udp_writer(cmd.token, '1'*16, writer_queue, disconnected_evt))
-					self.server_queues[cmd.token] = {}
-					self.server_queues[cmd.token]['1'*16] = writer_queue #since it's udp there is only one 'stream'
-					await self.send_continue(cmd)
-					while not disconnected_evt.is_set():
-						x = await in_queue.get()
-						data, addr = x
-						reply = WSNServerSocketData(cmd.token, '1'*16, data, addr[0], addr[1])
-						await self.send_data(reply.to_bytes())
-					
-					servertransport.close()
+					print('UDP connect')
+					print('Client connecting to %s:%s' % (cmd.ip, cmd.port))
+					try:
+						udp_connection_token = b'\x00'*16
+						in_queue = asyncio.Queue()
+						writer_queue = asyncio.Queue()
+						disconnected_evt = asyncio.Event()
+						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
+						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory, remote_addr=(cmd.ip, int(cmd.port)))
+						x = asyncio.create_task(self.handle_udp_writer(cmd.token, udp_connection_token, servertransport, disconnected_evt))
+						self.server_queues[cmd.token] = {}
+						self.server_queues[cmd.token][udp_connection_token] = writer_queue #since it's udp there is only one 'stream'
+						await self.send_continue(cmd)
+						while not disconnected_evt.is_set():
+							x = await in_queue.get()
+							data, addr = x
+							reply = WSNServerSocketData(cmd.token, udp_connection_token, data, addr[0], addr[1])
+							await self.send_data(reply.to_bytes())
+						
+						servertransport.close()
+					except Exception as e:
+						print(e)
+						traceback.print_exc()
 			else:
 				# bind command
 				if cmd.protocol == 'TCP':
@@ -530,7 +537,8 @@ class WSNETAgent:
 							str(logon['logonserver']), 
 							'X64', # TODO 
 							str(socket.getfqdn()), 
-							str(logon['usersid'])
+							str(logon['usersid']),
+							'%s' % platform.system().upper(),
 						)
 					else:
 						info = WSNGetInfoReply(
@@ -541,7 +549,8 @@ class WSNETAgent:
 							'', 
 							'X64', # TODO 
 							str(socket.getfqdn()), 
-							''
+							'',
+							'%s' % platform.system().upper(),
 						)
 					await self.send_data(info.to_bytes())
 					await self.send_ok(cmd)

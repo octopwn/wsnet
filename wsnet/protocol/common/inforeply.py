@@ -6,7 +6,7 @@ import io
 import json
 
 class WSNGetInfoReply(CMD):
-	def __init__(self, token, pid, username, domain, logonserver, cpuarch, hostname, usersid):
+	def __init__(self, token, pid, username, domain, logonserver, cpuarch, hostname, usersid, os):
 		self.type = CMDType.GETINFOREPLY
 		self.token = token
 		self.pid = pid
@@ -16,6 +16,7 @@ class WSNGetInfoReply(CMD):
 		self.cpuarch = cpuarch
 		self.hostname = hostname
 		self.usersid = usersid
+		self.os = os
 
 	
 	@staticmethod
@@ -32,7 +33,8 @@ class WSNGetInfoReply(CMD):
 		cpuarch = readStr(buff)
 		hostname = readStr(buff, 'utf-16-le')
 		usersid = readStr(buff)
-		return WSNGetInfoReply(token, pid, username, domain, logonserver, cpuarch, hostname, usersid)
+		os = readStr(buff)
+		return WSNGetInfoReply(token, pid, username, domain, logonserver, cpuarch, hostname, usersid, os)
 	
 	def to_data(self):
 		buff = io.BytesIO()
@@ -49,6 +51,7 @@ class WSNGetInfoReply(CMD):
 		writeStr(buff, self.cpuarch)
 		writeStr(buff, self.hostname, encoding='utf-16-le')
 		writeStr(buff, self.usersid)
+		writeStr(buff, self.os)
 		buff.seek(0,0)
 		return buff.read()
 	
@@ -60,7 +63,8 @@ class WSNGetInfoReply(CMD):
 			'logonserver' : self.logonserver,
 			'cpuarch' : self.cpuarch,
 			'hostname' : self.hostname,
-			'usersid' : self.usersid
+			'usersid' : self.usersid,
+			'os' : self.os
 		}
 
 	def to_json(self):
