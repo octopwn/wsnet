@@ -120,7 +120,11 @@ class WSNETWSServer:
 			raise Exception('Client provided an invalid Origin header %s! Terminating connection' % origin)
 		
 	async def handle_client(self, ws):
-		path = ws.path
+		# fucking API changes
+		if hasattr(ws, 'path') is False:
+			path = ws.request.path
+		else:
+			path = ws.path
 		remote_ip, remote_port = ws.remote_address
 		raddr = '%s:%d' % (remote_ip, remote_port)
 		logger.info('[%s] Client connected' % raddr)
