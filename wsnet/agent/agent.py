@@ -86,6 +86,68 @@ class TCPServerConnection:
 				writer_task.cancel()
 			del self.agent.server_queues[self.token][connectiontoken]
 
+def address_resolver(ip_or_hostname:str):
+	try:
+		ipaddress.ip_address(ip_or_hostname)
+		try:
+			return socket.gethostbyaddr(ip_or_hostname)[0]
+		except:
+			return ''
+	except:
+		pass
+	
+	try:
+		ip = socket.gethostbyname(ip_or_hostname)
+		return ip
+	except:
+		return ''
+
+async def resolve_single_addr(
+    addr: str,
+    executor,
+    timeout: float = 0.2,
+) -> typing.Optional[str]:
+    """
+    Resolves a single address, enforcing a timeout (in seconds).
+    Returns the resolved result or None if there's a timeout/error.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        # run_in_executor returns an awaitable, which we wrap with wait_for
+        return await asyncio.wait_for(
+            loop.run_in_executor(executor, address_resolver, addr),
+            timeout=timeout
+        )
+    except (asyncio.TimeoutError, Exception) as e:
+        # Timeout or other exception
+        print(f"Failed to resolve {addr}: {e}")
+        return None
+
+async def resolve_addresses(agent, executor, cmd):
+	try:
+		print('Resolving addresses')
+		cmd = typing.cast(WSNResolv, cmd)
+		res = []
+
+		tasks = [
+            asyncio.create_task(resolve_single_addr(addr, executor, timeout=0.2))
+            for addr in cmd.ip_or_hostnames
+        ]
+			
+		results = await asyncio.gather(*tasks, return_exceptions=True)
+
+		for addr, result in zip(cmd.ip_or_hostnames, results):
+			if isinstance(result, Exception) or result is None:
+				res.append('')
+			else:
+				res.append(result)
+
+		print('Resolved addresses: %s' % res)
+		reply = WSNResolv(cmd.token, res)
+		await agent.send_data(reply.to_bytes())
+	except Exception as e:
+		traceback.print_exc()
+		await agent.send_err(cmd, 'Resolve failed', e)
 
 class WSNETAgent:
 	def __init__(self, transport:GenericTransport, send_full_exception:bool = True):
@@ -99,6 +161,12 @@ class WSNETAgent:
 		self.file_queues = {}
 		self.__servers = {} #token -> server
 		self.__running_tasks = {} #token -> task
+		self.executor = None
+		try:
+			from concurrent.futures import ThreadPoolExecutor
+			self.executor = ThreadPoolExecutor(max_workers=50)
+		except:
+			pass
 
 	def get_connection_id(self):
 		t = self.__conn_id
@@ -471,9 +539,6 @@ class WSNETAgent:
 				await self.send_data(reply.to_bytes())
 			else:
 				await self.send_err(cmd, 'File operation %s not implemented' % cmd.type.value, '')
-
-
-
 		except:
 			traceback.print_exc()
 			await self.send_err(cmd, 'File operation failed %s' % cmd.type, traceback.format_exc())
@@ -502,23 +567,7 @@ class WSNETAgent:
 				await self.server_queues[cmd.token][cmd.connectiontoken].put(cmd)
 
 			elif cmd.type == CMDType.RESOLV:
-				cmd = typing.cast(WSNResolv, cmd)
-				res = []
-				for ip_or_hostname in cmd.ip_or_hostnames:
-					try:
-						try:
-							ipaddress.ip_address(ip_or_hostname)
-							res.append(socket.gethostbyaddr(ip_or_hostname)[0])
-							continue
-						except:
-							pass
-
-						ip = socket.gethostbyname(ip_or_hostname)
-						res.append(ip)
-					except Exception as e:
-						res.append('')
-				reply = WSNResolv(cmd.token, res)
-				await self.send_data(reply.to_bytes())
+				asyncio.create_task(resolve_addresses(self, self.executor, cmd))
 					
 			if cmd.type == CMDType.CONNECT: 
 				self.__running_tasks[cmd.token] = asyncio.create_task(self.socket_connect(cmd))
