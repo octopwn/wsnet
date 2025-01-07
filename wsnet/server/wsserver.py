@@ -173,7 +173,7 @@ async def amain(args):
 			ssl_ctx=ssl_ctx, 
 			secret = args.secret, 
 			disable_origin_check=args.noorigin,
-			disable_security=args.disable_security
+			disable_security=not args.enable_security
 		)
 
 		await server.run()
@@ -193,8 +193,8 @@ def main():
 	parser.add_argument('--ssl-ca',  help='CA cert file for client cert validations')
 	parser.add_argument('--secret',  type=str, help='Secret string to protect this proxy from malicious connections')
 	parser.add_argument('--noorigin', action='store_true', help='Disables origin header validation')
-	parser.add_argument('--disable-security', action='store_true', help='Disables all security validations')
-	parser.add_argument('--plaintext', action='store_true', help='Disables TLS')
+	parser.add_argument('--enable-security', action='store_true', help='Disables all security validations')
+	parser.add_argument('--ssl', action='store_true', help='Enable TLS')
 
 	args = parser.parse_args()
 	if args.verbose == 1:
@@ -204,7 +204,7 @@ def main():
 		logging.basicConfig(level=1)
 		logger.setLevel(logging.DEBUG)
 	
-	if args.plaintext is True:
+	if args.ssl is False:
 		args.ssl_cert = None
 		args.ssl_key = None
 		args.ssl_ca = None
