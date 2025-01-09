@@ -154,6 +154,14 @@ class WSNETAgent:
 		self.transport = transport
 		self.send_full_exception = send_full_exception
 
+		self.__pid = ''
+		self.__username = ''
+		self.__domain = ''
+		self.__logonserver = ''
+		self.__logonserverip = ''
+		self.__hostname = ''
+		self.__cpuarch = ''
+		self.__usersid = ''
 		self.connections = {} #connection_id -> smbmachine
 		self.__conn_id = 10
 		self.__process_queues = {} #token -> in_queue
@@ -163,10 +171,13 @@ class WSNETAgent:
 		self.__running_tasks = {} #token -> task
 		self.executor = None
 		try:
+			# this is used for name resolution
 			from concurrent.futures import ThreadPoolExecutor
 			self.executor = ThreadPoolExecutor(max_workers=50)
 		except:
 			pass
+
+		self.get_basic_info()
 
 	def get_connection_id(self):
 		t = self.__conn_id
@@ -200,6 +211,44 @@ class WSNETAgent:
 			extra = str(exc)
 		reply = WSNErr(cmd.token, reason, extra)
 		await self.send_data(reply.to_bytes())
+
+	def get_basic_info(self):
+		self.__pid = str(os.getpid())
+		self.__username = str(os.getlogin())
+		self.__domain = ''
+		self.__logonserver = ''
+		self.__logonserverip = ''
+		self.__hostname = str(socket.getfqdn())
+		self.__cpuarch = 'X64'
+		self.__usersid = ''
+		
+		if platform.system() == 'Windows':
+			from winacl.functions.highlevel import get_logon_info
+			logon = get_logon_info()
+			self.__username = str(logon['username'])
+			self.__domain   = str(logon['domain'])
+			self.__logonserver = str(logon['logonserver'])
+			self.__usersid = str(logon['usersid'])
+			self.__logonserverip = str(socket.getfqdn(logon['logonserver']))
+	
+	async def handle_info(self, cmd:WSNGetInfo):
+		try:
+			info = WSNGetInfoReply(
+				cmd.token,
+				self.__pid,
+				self.__username,
+				self.__domain,
+				self.__logonserver,
+				self.__cpuarch,
+				self.__hostname, 
+				self.__usersid,
+				'%s' % platform.system().upper(),
+				self.__logonserverip
+			)
+			await self.send_data(info.to_bytes())
+			await self.send_ok(cmd)
+		except Exception as e:
+			await self.send_err(cmd, str(e), e)
 
 	async def handle_udp_writer(self, token, connectiontoken, transport, disconnected_evt):
 		try:
@@ -277,9 +326,6 @@ class WSNETAgent:
 
 					return
 				else:
-					# not tested!!!!
-					print('UDP connect')
-					print('Client connecting to %s:%s' % (cmd.ip, cmd.port))
 					try:
 						udp_connection_token = b'\x00'*16
 						in_queue = asyncio.Queue()
@@ -299,7 +345,6 @@ class WSNETAgent:
 						
 						servertransport.close()
 					except Exception as e:
-						print(e)
 						traceback.print_exc()
 			else:
 				# bind command
@@ -574,37 +619,7 @@ class WSNETAgent:
 			elif cmd.type == CMDType.SD:
 				await self.send_err(cmd, 'Unexpected token for socket data!', '')
 			elif cmd.type == CMDType.GETINFO:
-				try:
-					if platform.system() == 'Windows':
-						from winacl.functions.highlevel import get_logon_info
-						logon = get_logon_info()
-						info = WSNGetInfoReply(
-							cmd.token, 
-							str(os.getpid()), 
-							str(logon['username']),
-							str(logon['domain']),
-							str(logon['logonserver']), 
-							'X64', # TODO 
-							str(socket.getfqdn()), 
-							str(logon['usersid']),
-							'%s' % platform.system().upper(),
-						)
-					else:
-						info = WSNGetInfoReply(
-							cmd.token, 
-							str(os.getpid()), 
-							str(os.getlogin()),
-							'',
-							'', 
-							'X64', # TODO 
-							str(socket.getfqdn()), 
-							'',
-							'%s' % platform.system().upper(),
-						)
-					await self.send_data(info.to_bytes())
-					await self.send_ok(cmd)
-				except Exception as e:
-					await self.send_err(cmd, str(e), e)
+				await self.handle_info(cmd)
 			elif cmd.type.value >= 300 and cmd.type.value < 320:
 				await self.process_fileop(cmd)
 			return True, None
