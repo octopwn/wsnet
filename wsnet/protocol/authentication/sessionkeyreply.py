@@ -1,5 +1,4 @@
 
-import ipaddress
 import io
 from wsnet.protocol.cmdtypes import CMDType
 from wsnet.protocol import CMD
