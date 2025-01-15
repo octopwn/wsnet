@@ -36,6 +36,9 @@ class UDPServerProtocol:
 	
 	def connection_lost(self, exc):
 		self.in_queue.put_nowait((None, exc))
+	
+	def error_received(self, exc):
+		self.in_queue.put_nowait((None, exc))
 
 class TCPServerConnection:
 	def __init__(self, agent, token, ip, port):
@@ -120,12 +123,10 @@ async def resolve_single_addr(
         )
     except (asyncio.TimeoutError, Exception) as e:
         # Timeout or other exception
-        print(f"Failed to resolve {addr}: {e}")
         return None
 
 async def resolve_addresses(agent, executor, cmd):
 	try:
-		print('Resolving addresses')
 		cmd = typing.cast(WSNResolv, cmd)
 		res = []
 
@@ -142,7 +143,6 @@ async def resolve_addresses(agent, executor, cmd):
 			else:
 				res.append(result)
 
-		print('Resolved addresses: %s' % res)
 		reply = WSNResolv(cmd.token, res)
 		await agent.send_data(reply.to_bytes())
 	except Exception as e:
@@ -340,6 +340,8 @@ class WSNETAgent:
 						while not disconnected_evt.is_set():
 							x = await in_queue.get()
 							data, addr = x
+							if isinstance(addr, Exception):
+								continue
 							reply = WSNServerSocketData(cmd.token, udp_connection_token, data, addr[0], addr[1])
 							await self.send_data(reply.to_bytes())
 						

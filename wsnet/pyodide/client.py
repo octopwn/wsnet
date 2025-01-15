@@ -33,6 +33,8 @@ class WSNetworkTCP:
 	async def terminate(self):
 		if self.internal_in_q is not None:
 			self.internal_in_q.put_nowait(None)
+		if self.in_q is not None:
+			self.in_q.put_nowait((None, None))
 		if self.in_task is not None:
 			self.in_task.cancel()
 		if self.out_task is not None:
