@@ -15,12 +15,16 @@ except:
 	pass
 
 class FakeSocket:
-	def __init__(self, ip, port):
+	def __init__(self, ip, port, writer):
 		self.ip = ip
 		self.port = port
+		self.writer = writer
 
 	def getpeername(self):
 		return (str(self.ip), int(self.port))
+	
+	async def sendto(self, data:bytes, addr:typing.Tuple[str, int]):
+		await self.writer.sendto(data, addr)
 	
 class WSNetworkServerUDPReader:
 	def __init__(self, token, connectiontoken, in_q):
@@ -38,11 +42,11 @@ class WSNetworkServerUDPWriter:
 
 	def get_extra_info(self, infotype):
 		if infotype == "socket":
-			return FakeSocket(self.ip, self.port)
+			return FakeSocket(self.ip, self.port, self)
 
 	async def sendto(self, data, addr):
 		data = WSNServerSocketData(self.token, self.connectiontoken, data, addr[0], addr[1])
-		await self.ws.send(data.to_bytes())
+		js.sendWebSocketData(self.ws, data.to_bytes())
 
 class WSNetworkUDPServer:
 	def __init__(self, transportfactory, ip, port, bindtype = 1, reuse_ws = False):
@@ -51,6 +55,7 @@ class WSNetworkUDPServer:
 		self.ws_url = None
 		self.ws = None
 		self.ws_proxy = None
+		self.writer = None
 		self.ip = ip
 		self.port = port
 		self.reuse_ws = reuse_ws
@@ -68,6 +73,8 @@ class WSNetworkUDPServer:
 
 		self.transport = None
 		
+	def close(self):
+		x = asyncio.create_task(self.terminate())
 
 	async def terminate(self):
 		if self.in_task is not None:
@@ -75,6 +82,8 @@ class WSNetworkUDPServer:
 		if self.out_task is not None:
 			self.out_task.cancel()
 		if self.ws is not None:
+			if self.writer is not None:
+				await self.writer.sendto(b'', ('', 0)) # this will trigger the termination of the server
 			js.deleteWebSocket(self.ws)
 		self.ws = None
 
@@ -121,6 +130,7 @@ class WSNetworkUDPServer:
 			if cmd.type == CMDType.CONTINUE:
 				self.transport = self.transportfactory()
 				self.writer = WSNetworkServerUDPWriter(self.ws, self.token, self.connectiontoken, self.ip, self.port)
+				self.transport.connection_made(self.writer)
 				return True, None
 			if cmd.type == CMDType.ERR:
 				raise Exception('Connection failed, proxy sent error. Err: %s' % cmd.reason)
