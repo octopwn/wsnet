@@ -426,18 +426,16 @@ class WSNETAgent:
 						writer_queue = asyncio.Queue()
 						disconnected_evt = asyncio.Event()
 						protofactory = lambda: UDPServerProtocol(in_queue, disconnected_evt)
-						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory)
-						x = asyncio.create_task(self.handle_udp_writer(cmd.token, b'1'*16, writer_queue, disconnected_evt))
+						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+						sock.bind((cmd.ip, cmd.port))
+						servertransport, serverproto = await asyncio.get_event_loop().create_datagram_endpoint(protofactory, sock=sock)
+						connectiontoken = b'1'*16
+						handler = UDPConnHandler(self, cmd.token, connectiontoken, servertransport, in_queue, writer_queue, disconnected_evt)
+
+						self.__servers[cmd.token] = asyncio.create_task(handler.run())
 						self.server_queues[cmd.token] = {}
-						self.server_queues[cmd.token][b'1'*16] = writer_queue #since it's udp there is only one 'stream'
+						self.server_queues[cmd.token][connectiontoken] = writer_queue #since it's udp there is only one 'stream'
 						await self.send_continue(cmd)
-						while not disconnected_evt.is_set():
-							x = await in_queue.get()
-							data, addr = x
-							reply = WSNServerSocketData(cmd.token, b'1'*16, data, addr[0], addr[1])
-							await self.send_data(reply.to_bytes())
-						
-						servertransport.close()
 						
 					elif cmd.bindtype == 2:
 						#LLMNR
@@ -508,6 +506,7 @@ class WSNETAgent:
 
 
 		except Exception as e:
+			traceback.print_exc()
 			logger.debug("Socket handling error: %s\n%s", e, traceback.format_exc())
 			await self.send_err(cmd, 'Socket connect failed: %s' % e, e)
 		finally:
