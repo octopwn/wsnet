@@ -140,7 +140,6 @@ async def resolve_addresses(agent, executor, cmd):
 		reply = WSNResolv(cmd.token, res)
 		await agent.send_data(reply.to_bytes())
 	except Exception as e:
-		traceback.print_exc()
 		await agent.send_err(cmd, 'Resolve failed', e)
 
 class UDPConnHandler:
@@ -365,7 +364,7 @@ class WSNETAgent:
 			if cmd.bind is False:
 				if cmd.protocol == 'TCP':
 					logger.debug('Client connecting to %s:%s' % (cmd.ip, cmd.port))
-					reader, writer = await asyncio.open_connection(cmd.ip, int(cmd.port))
+					reader, writer = await asyncio.wait_for(asyncio.open_connection(cmd.ip, int(cmd.port)), timeout=5) #TODO: maybe should remotely set timeout?
 					logger.debug('Connection to %s:%s established' % (cmd.ip, cmd.port))
 					in_q = asyncio.Queue()
 					self.__process_queues[cmd.token] = in_q
@@ -506,7 +505,6 @@ class WSNETAgent:
 
 
 		except Exception as e:
-			traceback.print_exc()
 			logger.debug("Socket handling error: %s\n%s", e, traceback.format_exc())
 			await self.send_err(cmd, 'Socket connect failed: %s' % e, e)
 		finally:
@@ -632,7 +630,6 @@ class WSNETAgent:
 			else:
 				await self.send_err(cmd, 'File operation %s not implemented' % cmd.type.value, '')
 		except:
-			traceback.print_exc()
 			await self.send_err(cmd, 'File operation failed %s' % cmd.type, traceback.format_exc())
 
 	async def process_incoming(self, data_raw:bytes):
