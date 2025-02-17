@@ -36,7 +36,7 @@ jobs:
       shell: bash
 
     - name: Archive the executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wsnet_windows
         path: dist/wsserver.exe
