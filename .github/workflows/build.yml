@@ -68,7 +68,7 @@ jobs:
       shell: bash
 
     - name: Archive the executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wsnet_linux
         path: dist/wsserver
@@ -103,14 +103,14 @@ jobs:
 
     - name: Archive the executable (macOS Intel)
       if: matrix.architecture == 'x86_64'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wsnet_macos_intel
         path: dist/wsserver
 
     - name: Archive the executable (macOS Apple Silicon)
       if: matrix.architecture == 'arm64'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wsnet_macos_arm64
         path: dist/wsserver
