@@ -120,18 +120,20 @@ class WSNETWSServer:
 			raise Exception('Client provided an invalid Origin header %s! Terminating connection' % origin)
 		
 	async def handle_client(self, ws):
-		# fucking API changes
 		if hasattr(ws, 'path') is False:
 			path = ws.request.path
+			request_headers = ws.request.headers
 		else:
 			path = ws.path
+			request_headers = ws.request_headers
+
 		remote_ip, remote_port = ws.remote_address
 		raddr = '%s:%d' % (remote_ip, remote_port)
 		logger.info('[%s] Client connected' % raddr)
 
 		if self.disable_security is False:
 			try:
-				self.validate_client(remote_ip, remote_port, path, ws.request_headers.get('Origin', None))
+				self.validate_client(remote_ip, remote_port, path, request_headers.get('Origin', None))
 			except Exception as e:
 				print('Failed to validate client! Reason: %s' % e)
 				return

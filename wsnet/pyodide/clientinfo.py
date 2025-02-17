@@ -32,6 +32,9 @@ class WSNETClientInfo:
 			disconnected_evt_proxy = create_proxy(self.disconnected_evt)
 			data_in_proxy = create_proxy(self.internal_in_q)
 			self.ws_url = js.document.getElementById('proxyurl')
+			if self.ws_url is None or self.ws_url == '':
+				return None, Exception('No proxy URL found')
+			
 			self.ws = js.createNewWebSocket(str(self.ws_url.value), connected_evt_proxy, data_in_proxy, disconnected_evt_proxy, self.reuse_ws, to_js(self.token))
 			cmd = WSNGetInfo(self.token)
 			#print(cmd.to_bytes())
