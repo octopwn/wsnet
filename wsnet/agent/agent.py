@@ -7,6 +7,7 @@ import ipaddress
 import typing
 import traceback
 import shutil
+import netifaces
 
 from wsnet import logger
 from wsnet.protocol import *
@@ -17,6 +18,20 @@ class GenericTransport:
 
 	async def send(self, data:bytes):
 		raise NotImplementedError()
+
+def get_ips_from_interface(interface:str, ip_version:int = 4):
+	ips = []
+	if ip_version == 4:
+		addresses = netifaces.ifaddresses(interface)
+		if netifaces.AF_INET in addresses:
+			for addr_info in addresses[netifaces.AF_INET]:
+				ips.append(addr_info['addr'])
+	elif ip_version == 6:
+		addresses = netifaces.ifaddresses(interface)
+		if netifaces.AF_INET6 in addresses:
+			for addr_info in addresses[netifaces.AF_INET6]:
+				ips.append(addr_info['addr'])
+	return ips
 
 # https://gist.github.com/vxgmichel/e47bff34b68adb3cf6bd4845c4bed448
 class UDPServerProtocol:
@@ -439,12 +454,26 @@ class WSNETAgent:
 					elif cmd.bindtype == 2:
 						#LLMNR
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-						sock.bind(('', 5355))
-						group = ipaddress.ip_address('224.0.0.252').packed
-						mreq = struct.pack('4sL', group, socket.INADDR_ANY)
-						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-						sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+
+						sock.bind(('', 5355))
+						llmnr_addr = "224.0.0.252"
+						llmnr_addr6 = "FF02:0:0:0:0:0:1:3"
+
+						# IPv4
+						for ip in get_ips_from_interface(cmd.ip, 4):
+							mreq = socket.inet_aton(llmnr_addr) + socket.inet_aton(ip)
+							sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+						# IPv6
+						try:
+							if_index = socket.if_nametoindex(cmd.ip)
+							mreq6 = socket.inet_pton(socket.AF_INET6, llmnr_addr6) + struct.pack('@I', if_index)
+							sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq6)
+						except Exception as e:
+							pass
+						
 						sock.setblocking(False)
 						in_queue = asyncio.Queue()
 						writer_queue = asyncio.Queue()
@@ -463,8 +492,11 @@ class WSNETAgent:
 					elif cmd.bindtype == 3:
 						# NBTNS
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-						sock.bind((cmd.ip, cmd.port))
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+						for ip in get_ips_from_interface(cmd.ip, 4):
+							sock.bind((ip, 137))
+							break
+						
 						sock.setblocking(False)
 						in_queue = asyncio.Queue()
 						writer_queue = asyncio.Queue()
@@ -482,12 +514,25 @@ class WSNETAgent:
 					elif cmd.bindtype == 4:
 						# MDNS
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-						sock.bind(('0.0.0.0', 5353))
-						group = ipaddress.ip_address('224.0.0.251').packed
-						mreq = struct.pack('4sL', group, socket.INADDR_ANY)
-						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-						sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+						mdns_addr = "224.0.0.251"
+						mdns_addr6 = "FF02::FB"
+						sock.bind(('', 5353))
+
+						# IPv4
+						for ip in get_ips_from_interface(cmd.ip,  4):
+							mreq = socket.inet_aton(mdns_addr) + socket.inet_aton(ip)
+							sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+						# IPv6
+						try:
+							if_index = socket.if_nametoindex(cmd.ip)
+							mreq6 = socket.inet_pton(socket.AF_INET6, mdns_addr6) + struct.pack('@I', if_index)
+							sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq6)
+						except Exception as e:
+							pass
+
 						sock.setblocking(False)
 						in_queue = asyncio.Queue()
 						writer_queue = asyncio.Queue()
