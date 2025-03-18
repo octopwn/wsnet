@@ -41,7 +41,8 @@ setup(
 	install_requires=[
 		'websockets',
 		'aiohttp',
-		'aiosmb>=0.4.4'
+		'aiosmb>=0.4.4',
+        'netifaces>=0.10.4',
 	],
 	
 	classifiers=(
