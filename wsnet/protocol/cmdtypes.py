@@ -46,5 +46,9 @@ class CMDType(enum.Enum):
 	FILERM = 311
 	FILESTAT = 312
 
-
-
+	# Process operations
+	PROCLIST = 400
+	PROCSTART = 401
+	PROCKILL = 402
+	PROCINFO = 403
+	PROCSTD = 404

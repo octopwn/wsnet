@@ -86,7 +86,11 @@ from wsnet.protocol.fileop.fileopen import WSNFileOpen
 from wsnet.protocol.fileop.filerm import WSNFileRM
 from wsnet.protocol.fileop.filestat import WSNFileStat
 from wsnet.protocol.connection.resolv import WSNResolv
-
+from wsnet.protocol.processop.plist import WSNProcessList
+from wsnet.protocol.processop.pkill import WSNProcessKill
+from wsnet.protocol.processop.pinfo import WSNProcessInfo
+from wsnet.protocol.processop.pstart import WSNProcessStart
+from wsnet.protocol.processop.procstd import WSNProcessSTD
 
 
 __all__ = [
@@ -132,6 +136,12 @@ __all__ = [
 	'WSNFileRM',
 	'WSNFileStat',
 	'WSNResolv',
+	'WSNProcessList',
+	'WSNProcessKill',
+	'WSNProcessInfo',
+	'WSNProcessStart',
+	'WSNProcessSTD',
+
 
 ]
 
@@ -179,4 +189,9 @@ type2cmd = {
 	CMDType.FILERM : WSNFileRM,
 	CMDType.FILESTAT : WSNFileStat,
 	CMDType.RESOLV : WSNResolv,
+	CMDType.PROCLIST : WSNProcessList,
+	CMDType.PROCKILL : WSNProcessKill,
+	CMDType.PROCINFO : WSNProcessInfo,
+	CMDType.PROCSTART : WSNProcessStart,
+	CMDType.PROCSTD : WSNProcessSTD,
 }
