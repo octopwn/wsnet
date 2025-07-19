@@ -7,7 +7,6 @@ import ipaddress
 import typing
 import traceback
 import shutil
-import netifaces
 
 from wsnet import logger
 from wsnet.protocol import *
@@ -20,6 +19,7 @@ class GenericTransport:
 		raise NotImplementedError()
 
 def get_ips_from_interface(interface:str, ip_version:int = 4):
+	import netifaces
 	ips = []
 	if ip_version == 4:
 		addresses = netifaces.ifaddresses(interface)
