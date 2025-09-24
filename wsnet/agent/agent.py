@@ -11,6 +11,49 @@ import shutil
 from wsnet import logger
 from wsnet.protocol import *
 
+
+import asyncio
+from typing import Awaitable, Any
+
+
+
+async def run_with_cancellation(
+    task: Awaitable[Any], cancel_event: asyncio.Event
+) -> Any:
+    """
+    Run an async task, but cancel if cancel_event is set first.
+
+    Args:
+        task: The awaitable (async function or task) to run.
+        cancel_event: An asyncio.Event used as a cancellation signal.
+
+    Returns:
+        The result of the task, if it completes before cancellation.
+
+    Raises:
+        CancelledError: If the cancel_event is set before task completion.
+        Exception: Any exception raised by the task itself.
+    """
+    loop = asyncio.get_running_loop()
+
+    # Wrap the cancel_event into a task
+    cancel_task = loop.create_task(cancel_event.wait())
+    main_task = loop.create_task(task)
+
+    done, pending = await asyncio.wait(
+        {main_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+
+    # Cancel whichever task is still pending
+    for p in pending:
+        p.cancel()
+
+    if cancel_task in done and cancel_event.is_set():
+        main_task.cancel()
+        raise asyncio.CancelledError("Task was cancelled by event")
+
+    return await main_task
+
 class GenericTransport:
 	def __init__(self):
 		pass
@@ -55,48 +98,73 @@ class UDPServerProtocol:
 	def error_received(self, exc):
 		self.in_queue.put_nowait((None, exc))
 
+
 class TCPServerConnection:
-	def __init__(self, agent, token, ip, port):
+	def __init__(self, agent, token, ip, port, reader, writer):
 		self.agent = agent
-		self.token = token
+		self.token = token # token that identifies the TCP server itself
+		self.reader = reader
+		self.writer = writer
+		self.connectiontoken = self.agent.get_connection_id() # token that identifies this new connection
 		self.ip = ip
 		self.port = port
+		self.disconnected_evt = asyncio.Event()
 	
-	async def handle_server_client_write(self, connectiontoken, writer, disconnected_evt):
+	async def stop(self):
 		try:
-			while not disconnected_evt.is_set():
-				data = await self.agent.server_queues[self.token][connectiontoken].get()
-				cmd = typing.cast(WSNServerSocketData, data)
-				if cmd.data == b'':
-					return
-				writer.write(cmd.data)
-				await writer.drain()
+			if self.disconnected_evt.is_set() is True:
+				return
+
+			self.disconnected_evt.set()
+			reply = WSNServerSocketData(self.token, self.connectiontoken, b'')
+			await self.agent.send_data(reply.to_bytes())
+			try:
+				del self.agent.server_tcp_connections[self.token][self.connectiontoken]
+			except KeyError:
+				pass
 		except Exception as e:
-			logger.exception('handle_server_client_write')
+			logger.exception('stop')
 		finally:
-			disconnected_evt.set()
+			self.writer.close()
 	
-	async def handle_server_client(self, reader, writer):
-		writer_task = None
-		connectiontoken = self.agent.get_connection_id()
-		disconnected_evt = asyncio.Event()
+	async def handle_write(self, cmd):
 		try:
-			self.agent.server_queues[self.token][connectiontoken] = asyncio.Queue()
-			writer_task = asyncio.create_task(self.handle_server_client_write(connectiontoken, writer, disconnected_evt))
-			while not disconnected_evt.is_set():
-				data = await reader.read(65536)
-				reply = WSNServerSocketData(self.token, connectiontoken, data)
+			cmd = typing.cast(WSNServerSocketData, cmd)
+			self.writer.write(cmd.data)
+			await self.writer.drain()
+			if cmd.data == b'':
+				await self.stop()
+				return
+		except Exception as e:
+			logger.exception('handle_write')
+			await self.stop()
+	
+	async def run(self):
+		# if this returns the connection will be closed
+		try:
+			# registering this connection
+			self.agent.server_tcp_connections[self.token][self.connectiontoken] = self
+			# signal the client that the connection is established
+			clientip, clientport = self.writer.get_extra_info('peername')
+			logger.debug('[TCP SERVER] Incoming connection. %s:%s <-> %s:%s' % (self.ip, self.port, clientip, clientport))
+			reply = WSNServerSocketData(self.token, self.connectiontoken, b'', clientip = clientip, clientport = clientport)
+			await self.agent.send_data(reply.to_bytes())
+
+			# start reading from the TCP client
+			while not self.disconnected_evt.is_set():
+				data = await run_with_cancellation(self.reader.read(65536), self.disconnected_evt)
+				reply = WSNServerSocketData(self.token, self.connectiontoken, data)
 				await self.agent.send_data(reply.to_bytes())
 				if data == b'':
+					# client disconnected
 					return
-
+		except asyncio.CancelledError:
+			return
 		except Exception as e:
-			logger.exception('handle_server_client')
+			logger.exception('[TCP SERVER] Connection error. %s:%s <-> %s:%s' % (self.ip, self.port, clientip, clientport))
 		finally:
-			disconnected_evt.set()
-			if writer_task is not None:
-				writer_task.cancel()
-			del self.agent.server_queues[self.token][connectiontoken]
+			logger.debug('[TCP SERVER] Connection closed. %s:%s <-> %s:%s' % (self.ip, self.port, clientip, clientport))
+			await self.stop()
 
 def address_resolver(ip_or_hostname:str):
 	try:
@@ -238,6 +306,7 @@ class WSNETAgent:
 		self.__conn_id = 10
 		self.__process_queues = {} #token -> in_queue
 		self.server_queues = {} #token -> {connectiontoken -> in_queue}
+		self.server_tcp_connections = {} #token -> {connectiontoken -> connection}
 		self.file_queues = {}
 		self.__servers = {} #token -> server
 		self.__running_tasks = {} #token -> task
@@ -336,41 +405,6 @@ class WSNETAgent:
 			logger.exception('handle_udp_writer')
 		finally:
 			disconnected_evt.set()
-
-	async def handle_server_client_write(self, token, connectiontoken, writer, disconnected_evt):
-		try:
-			while not disconnected_evt.is_set():
-				data = await self.server_queues[token][connectiontoken].get()
-				cmd = typing.cast(WSNServerSocketData, data)
-				if cmd.data == b'':
-					return
-				writer.write(cmd.data)
-				await writer.drain()
-		except Exception as e:
-			logger.exception('handle_server_client_write')
-		finally:
-			disconnected_evt.set()
-
-	async def handle_server_client(self, token, reader, writer, disconnected_evt):
-		writer_task = None
-		try:
-			connectiontoken = self.get_connection_id()
-			self.server_queues[token][connectiontoken] = asyncio.Queue()
-			writer_task = await asyncio.create_task(self.handle_server_client_write(token, connectiontoken, writer, disconnected_evt))
-			while not disconnected_evt.is_set():
-				data = await reader.read(65536)
-				reply = WSNServerSocketData(token, connectiontoken, data)
-				await self.send_data(reply.to_bytes())
-				if data == b'':
-					return
-
-		except Exception as e:
-			logger.exception('handle_server_client')
-		finally:
-			disconnected_evt.set()
-			if writer_task is not None:
-				writer_task.cancel()
-			del self.server_queues[token][connectiontoken]
 		
 
 	async def socket_connect(self, cmd:WSNConnect):
@@ -424,11 +458,16 @@ class WSNETAgent:
 				if cmd.protocol == 'TCP':
 					if cmd.bindtype == 1:
 						#normal bind
-						connection = TCPServerConnection(self, cmd.token, cmd.ip, cmd.port)
-						self.server_queues[cmd.token] = {}
-						logger.debug('Client binding to %s:%s' % (cmd.ip, cmd.port))
+
+						async def on_new_connection(reader, writer):
+							connection = TCPServerConnection(self, cmd.token, cmd.ip, cmd.port, reader, writer)
+							await connection.run() # if this returns the connection will be closed
+
 						
-						server = await asyncio.start_server(connection.handle_server_client, host=str(cmd.ip), port=int(cmd.port))
+						self.server_tcp_connections[cmd.token] = {}
+						logger.debug('[TCP SERVER] Client binding to %s:%s' % (cmd.ip, cmd.port))
+						
+						server = await asyncio.start_server(on_new_connection, host=str(cmd.ip), port=int(cmd.port))
 						await self.send_continue(cmd)
 						self.__servers[cmd.token] = asyncio.create_task(server.serve_forever())
 					else:
@@ -436,6 +475,7 @@ class WSNETAgent:
 				else:
 					#udp server
 					if cmd.bindtype == 1:
+						logger.debug('[UDP SERVER] Client binding to %s:%s' % (cmd.ip, cmd.port))
 						in_queue = asyncio.Queue()
 						writer_queue = asyncio.Queue()
 						disconnected_evt = asyncio.Event()
@@ -453,6 +493,7 @@ class WSNETAgent:
 						
 					elif cmd.bindtype == 2:
 						#LLMNR
+						logger.debug('[LLMNR SERVER] Client binding to %s:%s' % (cmd.ip, cmd.port))
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
@@ -491,6 +532,7 @@ class WSNETAgent:
 					
 					elif cmd.bindtype == 3:
 						# NBTNS
+						logger.debug('[NBTNS SERVER] Client binding to %s:%s' % (cmd.ip, cmd.port))
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 						for ip in get_ips_from_interface(cmd.ip, 4):
@@ -513,6 +555,7 @@ class WSNETAgent:
 					
 					elif cmd.bindtype == 4:
 						# MDNS
+						logger.debug('[MDNS SERVER] Client binding to %s:%s' % (cmd.ip, cmd.port))
 						sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 						sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 						sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
@@ -550,7 +593,7 @@ class WSNETAgent:
 
 
 		except Exception as e:
-			logger.debug("Socket handling error: %s\n%s", e, traceback.format_exc())
+			logger.debug("[BINDING ERROR] Socket handling error: %s\n%s", e, traceback.format_exc())
 			await self.send_err(cmd, 'Socket connect failed: %s' % e, e)
 		finally:
 			if out_task is not None:
@@ -692,20 +735,49 @@ class WSNETAgent:
 				return True, None
 			
 			if cmd.token in self.file_queues and cmd.type == CMDType.OK:
+				cmd = typing.cast(WSNOK, cmd)
 				f = self.file_queues[cmd.token]
 				f.close()
 				del self.file_queues[cmd.token]
+				return True, None
+
+			if cmd.token in self.__servers and cmd.type == CMDType.OK:
+				cmd = typing.cast(WSNOK, cmd)
+				if cmd.token in self.server_tcp_connections:
+					# this is closing the server thus all connections will be closed
+					ctokents = list(self.server_tcp_connections[cmd.token].keys())
+					for connectiontoken in ctokents:
+						await self.server_tcp_connections[cmd.token][connectiontoken].stop()
+				
+				# cancelling main server task
+				self.__servers[cmd.token].cancel()
+				# removing token
+				del self.__servers[cmd.token]
 				return True, None
 					
 			if cmd.type == CMDType.SDSRV:
 				#print('Server data incoming! %s' % cmd)
 				cmd = typing.cast(WSNServerSocketData, cmd)
-				if cmd.token in self.server_queues:
+				if cmd.token in self.server_tcp_connections:
+					if cmd.connectiontoken in self.server_tcp_connections[cmd.token]:
+						await self.server_tcp_connections[cmd.token][cmd.connectiontoken].handle_write(cmd)
+					else:
+						# do not send an error because that will stop the entire server
+						# instead we're sending an empty message to the client, signaling that the connection is closed
+						reply = WSNServerSocketData(cmd.token, cmd.connectiontoken, b'')
+						await self.send_data(reply.to_bytes())
+						return True, None
+
+				elif cmd.token in self.server_queues:
 					if cmd.connectiontoken in self.server_queues[cmd.token]:
 						await self.server_queues[cmd.token][cmd.connectiontoken].put(cmd)
 					else:
-						await self.send_err(cmd, 'Server connection token not found', '')
+						#
+						logger.debug('UDP Server connection token not found')
+						pass
+						#await self.send_err(cmd, 'Server connection token not found', '')
 				else:
+					# this will terminate whichever task is handling the server on the client side
 					await self.send_err(cmd, 'Server token not found', '')
 
 			elif cmd.type == CMDType.RESOLV:
