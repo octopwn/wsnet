@@ -67,7 +67,7 @@ class WSNETWSInterface:
 				return
 			
 			cmd = CMD.from_bytes(data.to_py())
-			print('DATA IN: %s' % cmd.type)
+			#print('DATA IN: %s' % cmd.type)
 			if cmd.token in self.dispatch_table:
 				self.dispatch_table[cmd.token](cmd)
 			else:

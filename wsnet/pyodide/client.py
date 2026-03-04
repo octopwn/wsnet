@@ -37,7 +37,7 @@ class WSNetworkTCP:
 
 	def onDataReceived(self, cmd):
 		try:
-			print('DATA IN: %s' % cmd.type)
+			#print('DATA IN: %s' % cmd.type)
 			if cmd.type == CMDType.OK:
 				self.last_error = Exception('Remote end terminated the socket')
 				self.in_q.put_nowait((b'', self.last_error))
@@ -83,7 +83,7 @@ class WSNetworkTCP:
 			if self.last_error is not None:
 				raise self.last_error
 
-			print('CONNECTION ESTABLISHED')
+			#print('CONNECTION ESTABLISHED')
 			
 			self.out_task = asyncio.create_task(self.__handle_out())
 
