@@ -30,7 +30,7 @@ class WSNetworkTCP:
 		if self.out_task is not None:
 			self.out_task.cancel()
 		if self.token is not None:
-			WSNET_INTERFACE.deregisterConnection(self.token)
+			await WSNET_INTERFACE.deregisterConnection(self.token)
 		self.token = None
 		self.connection_established_evt.clear()
 		self.last_error = None
